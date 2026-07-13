@@ -118,12 +118,24 @@ It's a small unsigned tool that reads your clipboard, so it's fair to be suspici
   else. It does **not** install a low-level keyboard hook — that's the keylogger technique, and
   nudl never sees any keystroke but its own shortcut.
 - It's open source, and the entire cleaning engine is one file: `src/clean.py`.
-- **[VirusTotal scan of the released `nudl.exe`](https://www.virustotal.com/gui/file/27a5c30a9c6a6b220bcb2f25bfc8f867ce5b108f9f8b8c882f7db83cfecc61ea)**
-  — that's the exact binary inside `nudl-0.1.0-win64.zip`
-  (SHA-256 `27a5c30a…61ea`; check it yourself with
-  `Get-FileHash nudl.exe`). Windows Defender scans it clean.
-- SmartScreen may still warn about an unsigned build. That means it doesn't recognise the
-  publisher, not that it found anything.
+- SmartScreen will warn about the unsigned build. That means Windows doesn't recognise the
+  publisher — not that it found anything. Code signing is on the roadmap.
+
+### The VirusTotal score, stated plainly
+
+**[3 of ~70 engines flag `nudl.exe`](https://www.virustotal.com/gui/file/27a5c30a9c6a6b220bcb2f25bfc8f867ce5b108f9f8b8c882f7db83cfecc61ea)** — including ArcticWolf and SecureAge.
+
+I'd rather you hear that from me than find it yourself.
+
+Those are machine-learning heuristic scanners, and what they're reacting to is **PyInstaller**, not nudl. Bundling a Python interpreter inside a self-extracting executable looks structurally like a packer, and packers are what malware uses to hide — so a handful of aggressive engines flag *every* tool built this way. It's a known false-positive pattern, not a finding about this code.
+
+What matters more:
+
+- **Microsoft Defender scans it clean**, with current signatures and real-time protection on. Defender is what actually decides whether nudl can run on your machine.
+- **Every major engine reads clean** — the three that don't are heuristic outliers.
+- The scanned binary is **byte-identical to the one in the release zip** (SHA-256 `27a5c30a…61ea`). Don't trust me on that either — unzip it and run `Get-FileHash nudl.exe`.
+
+If that's not good enough for you, that's a completely reasonable place to land: run it from source instead (see below), where there's no packed binary at all and you can read every line.
 
 ## Development
 
