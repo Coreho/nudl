@@ -55,10 +55,24 @@ can burn one-time URLs), and no "check for rule updates" (it would mean phoning 
   the hotkey again within three seconds — restores the exact original bytes. A no-op is silent:
   if nudl changed nothing, you'll never know it ran.
 
-## Install and use
+## Install
 
-Windows 11 (Windows 10 best-effort), Python 3.11+. Packaged builds (pip / winget / Scoop) are
-on the roadmap.
+Windows 11 (Windows 10 best-effort). No Python needed — everything is bundled.
+
+**Download the [latest release](https://github.com/Coreho/nudl/releases/latest)**, unzip it
+anywhere, and run `nudl.exe`.
+
+It's an unsigned build, so SmartScreen will show *"Windows protected your PC."* Click
+**More info → Run anyway**. See [Is it safe?](#is-it-safe) — I'd rather tell you up front than
+have you find out.
+
+Or with [Scoop](https://scoop.sh):
+
+```
+scoop install https://raw.githubusercontent.com/Coreho/nudl/master/scoop/nudl.json
+```
+
+From source (Python 3.11+):
 
 ```
 git clone https://github.com/Coreho/nudl.git
@@ -67,6 +81,8 @@ python -m venv .venv
 .venv\Scripts\pip install -e .
 .venv\Scripts\pythonw -m src.app
 ```
+
+## Use
 
 On first launch nudl asks how it should work: **Hotkey** (copy a link, press `Ctrl+Alt+V`) or
 **Automatic** (links are cleaned as you copy them). Switch any time from the tray menu. The
