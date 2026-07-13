@@ -107,9 +107,7 @@ def frame(*, url, caption, caption_colour, mark=False, show_key=False, show_toas
         x0, y0 = W - 48 - tw, 262
         d.rounded_rectangle((x0, y0, W - 48, y0 + 52), radius=8, fill=PANEL, outline=(44, 48, 56))
         d.text((x0 + 20, y0 + 16), label, font=F_TOAST, fill=FG)
-        d.text(
-            (W - 72 - F_TOAST_B.getlength("Undo"), y0 + 16), "Undo", font=F_TOAST_B, fill=ACCENT
-        )
+        d.text((W - 72 - F_TOAST_B.getlength("Undo"), y0 + 16), "Undo", font=F_TOAST_B, fill=ACCENT)
 
     return img
 
@@ -155,12 +153,10 @@ scenes = [
 ]
 
 frames = [img for img, hold in scenes for _ in range(hold)]
-frames[0].save(
-    OUT, save_all=True, append_images=frames[1:], duration=60, loop=0, optimize=True
-)
+frames[0].save(OUT, save_all=True, append_images=frames[1:], duration=60, loop=0, optimize=True)
 
 print(f"in  : {UGLY}")
 print(f"out : {CLEAN}")
 print(f"struck through ({len(REMOVED)}): {', '.join(REMOVED)}")
-print(f"KEPT on screen, as in reality: psc=1")
+print("KEPT on screen, as in reality: psc=1")
 print(f"\n{OUT}  ({OUT.stat().st_size / 1024:.0f} KB)")

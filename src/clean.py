@@ -1,7 +1,7 @@
 """The nudl cleaning engine — pure, offline, fail-safe.
 
 `clean(url) -> str` is the entire product; the tray, hotkey, clipboard watcher and
-toast are only delivery around it. See contracts/clean-contract.md.
+toast are only delivery around it.
 
 Three rules govern every line of this module:
 
@@ -33,7 +33,7 @@ __all__ = ["CleanResult", "clean", "clean_result", "load_rules"]
 
 BUNDLED_RULES_PATH = Path(__file__).with_name("rules.json")
 
-#: How many nested redirect wrappers to unwrap before giving up (SPEC-CLAUDE.md §5.1).
+#: How many nested redirect wrappers to unwrap before giving up.
 MAX_UNWRAP_DEPTH = 3
 
 #: Query keys that mean "this URL is cryptographically signed — any edit returns 403".
@@ -47,7 +47,7 @@ SIGNED_KEY_PREFIXES = ("x-amz-", "x-goog-", "x-ms-")
 
 @dataclass(frozen=True)
 class CleanResult:
-    """The outcome of one cleaning operation (data-model.md §1)."""
+    """The outcome of one cleaning operation."""
 
     original: str
     result: str

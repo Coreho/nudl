@@ -2,7 +2,7 @@
 #
 # --onedir, NOT --onefile: a onefile build unpacks itself into %TEMP% and runs from
 # there, which is textbook malware behaviour and draws far more AV heuristics than it
-# is worth. See BUILD-PLAN-CLAUDE.md "Trust / AV / SmartScreen".
+# is worth for an unsigned clipboard tool.
 #
 # Usage:  .\build.ps1
 

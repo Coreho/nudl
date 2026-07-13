@@ -1,11 +1,10 @@
-"""CP0 tripwire corpus — the standing compliance gate for nudl.
+"""The tripwire corpus — the standing compliance gate for nudl.
 
-This file is the specification of `clean()` in executable form. Per
-BUILD-PLAN-CLAUDE.md CP0 and SPEC-CLAUDE.md §13, the build is not shippable if any
-assertion here fails.
+This file is the specification of `clean()` in executable form. If any assertion here
+fails, the build is not shippable.
 
 The corpus is deliberately weighted toward the things that would BREAK a link the
-user needed, not toward the things nudl cleans well. Roughly a third of the cases
+user needed, not toward the things nudl cleans well. Roughly a quarter of the cases
 below are "looks like tracking but isn't" tripwires.
 """
 
@@ -296,7 +295,7 @@ def test_corpus(url: str, expected: str) -> None:
 
 
 def test_corpus_is_big_enough() -> None:
-    """SPEC-CLAUDE.md §13 mandates ~40 hand-vetted URLs with 8-10 tripwires."""
+    """The gate: at least 40 hand-vetted URLs, at least 8 of them tripwires."""
     assert len(CORPUS) >= 40
     tripwires = [c for c in CORPUS if c[0].startswith("TRIPWIRE")]
     assert len(tripwires) >= 8
@@ -354,7 +353,7 @@ def test_unwrap_depth_is_bounded() -> None:
 
 
 def test_makes_no_network_calls(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SC-006 / Constitution II: the cleaning path opens zero sockets."""
+    """The privacy promise, enforced: the cleaning path opens zero sockets."""
     import socket
 
     def explode(*args: object, **kwargs: object) -> None:

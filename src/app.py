@@ -1,6 +1,6 @@
 """nudl — wiring, threading, and the undo contract.
 
-Threading layout (SPEC-CLAUDE.md §7.2):
+Threading layout:
 
   main thread      pystray's icon loop. Owns the tray menu. Blocks in `Tray.run()`.
   "nudl-pump"      the Win32 message pump on the hidden message-only window. Owns the

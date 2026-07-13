@@ -1,21 +1,21 @@
 {
   "$comment": [
-    "nudl v0 bundled rule set — hand-rolled, ~25 rules. See contracts/rules-schema.md.",
-    "Adopts the ClearURLs SCHEMA SHAPE so a future migration stays open, but bundles NONE",
-    "of ClearURLs' rules data (its license is unverified).",
+    "nudl's bundled rule set — hand-rolled, ~25 rules. Small on purpose: you are meant",
+    "to be able to read it. Adopts the ClearURLs SCHEMA SHAPE so a future migration stays",
+    "open, but bundles NONE of ClearURLs' rules data (its license is unverified).",
     "",
     "Key-pattern syntax (matched case-insensitively against the query KEY, never the value):",
     "  'fbclid'    exact key match",
     "  '^utm_.*$'  anchored regex (leading '^')",
     "  'pd_rd_*'   prefix glob (trailing '*')",
     "",
-    "DELIBERATELY ABSENT:",
+    "DELIBERATELY ABSENT — both of these look like trackers and are not safe to strip:",
     "  si       — Spotify/YouTube share id. Removing it has broken shared-playlist and",
-    "             'who invited you' flows. v0 keeps it everywhere (SPEC-CLAUDE.md §5.3).",
-    "  keywords — SPEC-CLAUDE.md §6 lists it under Amazon, but amazon.com/s?keywords=...",
-    "             IS the search query; stripping it yields a blank search page. That",
-    "             violates Constitution I (never break a needed link), which outranks the",
-    "             rule list. Add it back only with a path scope."
+    "             'who invited you' flows. Kept everywhere.",
+    "  keywords — on Amazon this looks like a tracker, but amazon.com/s?keywords=... IS",
+    "             the search query; stripping it yields a blank search page. Breaking a",
+    "             link the user needed outranks removing a tracker. Add it back only with",
+    "             a path scope."
   ],
 
   "global_tracker_keys": [
