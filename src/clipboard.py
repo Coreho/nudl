@@ -114,7 +114,10 @@ def add_format_listener(hwnd: int) -> bool:
 
 
 def remove_format_listener(hwnd: int) -> None:
-    _user32.RemoveClipboardFormatListener(hwnd)
+    if not _user32.RemoveClipboardFormatListener(hwnd):
+        # Not fatal — we are shutting down — but a silent failure here means Windows is
+        # still posting WM_CLIPBOARDUPDATE to a window that no longer exists.
+        logger.warning("RemoveClipboardFormatListener failed: %s", ctypes.WinError())
 
 
 class OwnWriteGuard:

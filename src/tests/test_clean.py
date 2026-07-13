@@ -10,7 +10,7 @@ below are "looks like tracking but isn't" tripwires.
 
 import pytest
 
-from src.clean import clean
+from src.clean import MAX_UNWRAP_DEPTH, clean
 
 # --------------------------------------------------------------------------------------
 # The corpus: (label, input, expected output)
@@ -466,22 +466,45 @@ def test_clean_never_raises() -> None:
         clean(url)  # must not raise
 
 
-def test_unwrap_cycle_terminates() -> None:
-    """A wrapper pointing at itself must not hang or blow the stack."""
+def test_unwrap_of_a_wrapper_pointing_at_a_bare_wrapper_terminates() -> None:
+    """`l.php?u=<the bare l.php endpoint>` unwraps once and stops — it must not re-enter.
+
+    This used to be called a "cycle" test. It is not one, and it is worth being honest
+    about why: a true A->B->A cycle is not constructible in a URL, because each level has
+    to physically contain the next, so the string would have to be infinite. The visited
+    set in `clean()` is belt-and-braces against a *rule* that unwraps to itself, which is
+    what this asserts: one unwrap, then a clean stop at a target with no `u` param.
+    """
     self_ref = "https://l.facebook.com/l.php?u=https%3A%2F%2Fl.facebook.com%2Fl.php"
-    result = clean(self_ref)
-    assert result.startswith("http")
+    assert clean(self_ref) == "https://l.facebook.com/l.php"
 
 
 def test_unwrap_depth_is_bounded() -> None:
-    """Deeply nested wrappers stop at the depth cap and still return a usable URL."""
+    """Six nested wrappers, a cap of three: exactly three come off, and three remain.
+
+    `startswith("http")` is not an assertion, it is a formality — the *input* starts with
+    "http" too, so a clean() that ignored the cap entirely and echoed its argument back
+    would sail through it. Pin the exact residue instead: that is the only thing that can
+    tell "correctly bounded" apart from "completely broken".
+    """
     from urllib.parse import quote
 
-    url = "https://site.com/deep"
+    def wrap(url: str) -> str:
+        return "https://l.facebook.com/l.php?u=" + quote(url, safe="")
+
+    target = "https://site.com/deep"
+    nested = target
     for _ in range(6):
-        url = "https://l.facebook.com/l.php?u=" + quote(url, safe="")
-    result = clean(url)
-    assert result.startswith("http")
+        nested = wrap(nested)
+
+    # Three unwraps off a six-deep nest leaves a three-deep nest.
+    expected = target
+    for _ in range(6 - MAX_UNWRAP_DEPTH):
+        expected = wrap(expected)
+
+    result = clean(nested)
+    assert result != nested, "clean() returned its input — no unwrapping happened at all"
+    assert result == expected
 
 
 def test_makes_no_network_calls(monkeypatch: pytest.MonkeyPatch) -> None:

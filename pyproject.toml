@@ -8,6 +8,9 @@ license = { text = "MIT" }
 dependencies = [
     "pywin32>=306; sys_platform == 'win32'",
     "pystray>=0.19",
+    # tray.py imports PIL directly to draw the icon. pystray happens to pull Pillow in
+    # today, so this works undeclared — right up until it doesn't.
+    "Pillow>=9.2",
 ]
 
 [project.optional-dependencies]

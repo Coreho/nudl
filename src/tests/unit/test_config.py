@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from src import config
 
 
@@ -57,7 +59,7 @@ def test_wrong_types_fall_back_per_key(tmp_path: Path) -> None:
 def test_invalid_mode_falls_back(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"mode": "telepathy"}), encoding="utf-8")
-    assert config.load(path)["mode"] == "hotkey"
+    assert config.load(path)["mode"] == config.DEFAULTS["mode"]
 
 
 def test_blank_exception_domains_are_dropped(tmp_path: Path) -> None:
@@ -66,8 +68,33 @@ def test_blank_exception_domains_are_dropped(tmp_path: Path) -> None:
     assert config.load(path)["exceptions"] == ["example.com"]
 
 
-def test_save_is_atomic_and_leaves_no_temp_file(tmp_path: Path) -> None:
+def test_save_writes_complete_json_and_leaves_no_temp_file(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     config.save(dict(config.DEFAULTS), path)
-    assert path.exists()
     assert list(tmp_path.glob("*.tmp")) == []
+    assert json.loads(path.read_text(encoding="utf-8")) == dict(config.DEFAULTS)
+
+
+def test_a_crash_mid_write_leaves_the_old_config_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The actual atomicity guarantee — which the happy-path test above never touched.
+
+    Asserting "the file exists and there's no .tmp lying around" is satisfied just as well
+    by a save() that writes straight to the target. The claim being made is that a save
+    interrupted partway cannot corrupt a config that was already good, so that is what
+    gets interrupted here: the temp file is left half-written and os.replace never runs.
+    """
+    path = tmp_path / "config.json"
+    config.save(dict(config.DEFAULTS), path)
+    good = path.read_bytes()
+
+    def die(src, dst):  # noqa: ANN001 — stands in for os.replace
+        raise OSError("disk full")
+
+    monkeypatch.setattr(config.os, "replace", die)
+    with pytest.raises(OSError):
+        config.save({**config.DEFAULTS, "mode": "auto"}, path)
+
+    assert path.read_bytes() == good, "an interrupted save corrupted the config it replaced"
+    assert json.loads(path.read_text(encoding="utf-8"))["mode"] == "hotkey"

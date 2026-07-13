@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import re
 
+import pywintypes
 import win32con
 import win32gui
 
@@ -88,7 +89,10 @@ def parse(combo: str) -> tuple[int, int]:
 
 
 def _virtual_key(key: str) -> int:
-    if len(key) == 1 and (key.isalpha() or key.isdigit()):
+    # `isascii` is not decoration: 'ß'.upper() is 'SS', and ord() of a 2-char string is a
+    # TypeError, not the InvalidHotkey this module promises. Non-ASCII keys have no VK
+    # code anyway, so let them fall through to the raise below.
+    if len(key) == 1 and key.isascii() and (key.isalpha() or key.isdigit()):
         return ord(key.upper())
     if key in _NAMED_KEYS:
         return _NAMED_KEYS[key]
@@ -104,7 +108,10 @@ def register(hwnd: int, hotkey_id: int, combo: str) -> None:
     modifiers, vk = parse(combo)
     try:
         win32gui.RegisterHotKey(hwnd, hotkey_id, modifiers, vk)
-    except Exception as exc:  # noqa: BLE001 — pywin32 raises bare win32 errors
+    except pywintypes.error as exc:
+        # Only a genuine Win32 failure means "someone else owns this chord". A TypeError
+        # or a bad hwnd is a bug in nudl, and reporting it as a chord conflict would send
+        # whoever debugs it looking for a program that isn't there.
         raise HotkeyUnavailable(f"{combo!r} is already held by another application") from exc
 
 

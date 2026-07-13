@@ -36,10 +36,6 @@ def config_path() -> Path:
     return config_dir() / "config.json"
 
 
-def rules_path() -> Path:
-    return config_dir() / "rules.json"
-
-
 def log_path() -> Path:
     return config_dir() / "clean.log"
 

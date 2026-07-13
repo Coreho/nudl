@@ -32,8 +32,12 @@ UGLY = "https://www.amazon.com/dp/B08X7QK2P?tag=affiliate-20&ref_=nb_sb&psc=1&ut
 result = clean_result(UGLY)
 CLEAN = result.result
 REMOVED = result.params_removed
-assert result.changed, "the demo URL no longer cleans -- fix the demo, not the assert"
-assert "psc=1" in CLEAN, "the demo relies on psc=1 surviving"
+# `raise`, not `assert`: python -O strips asserts, and these two lines are the only thing
+# standing between the README's GIF and a picture of behaviour nudl no longer has.
+if not result.changed:
+    raise SystemExit("the demo URL no longer cleans -- fix the demo, not this check")
+if "psc=1" not in CLEAN:
+    raise SystemExit("the demo shows psc=1 surviving, and it no longer does")
 
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:

@@ -22,7 +22,9 @@ class FakeClipboard:
     """Stands in for the Win32 clipboard."""
 
     ClipboardBusy = app_module.clipboard.ClipboardBusy
-    WM_CLIPBOARDUPDATE = 0
+    # Mirror the real constant (0x031D). A double that quietly disagrees with the thing it
+    # doubles is a trap primed for whoever first drives `_pump()` through this fake.
+    WM_CLIPBOARDUPDATE = app_module.clipboard.WM_CLIPBOARDUPDATE
 
     def __init__(self, text: str | None = None) -> None:
         self.text = text

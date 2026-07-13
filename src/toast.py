@@ -183,7 +183,16 @@ class OverlayUI:
         chosen: dict[str, str] = {}
         done = threading.Event()
         self._post(lambda: self._build_mode_dialog(chosen, done, default))
-        done.wait()
+
+        # A bare wait() would be a deadlock waiting for a bad day: if the UI thread is
+        # dead, nothing will ever drain the queue, nothing will ever set `done`, and nudl
+        # hangs on first run having never reached the tray — an invisible zombie process.
+        # The user, though, may take as long as they like. So: wait on a person forever,
+        # wait on a corpse not at all.
+        while not done.wait(0.25):
+            if self._thread is None or not self._thread.is_alive():
+                logger.error("the UI thread died before the mode picker was answered")
+                return default
         return chosen.get("mode", default)
 
     def _build_mode_dialog(
