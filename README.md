@@ -4,16 +4,23 @@
 in Slack, Discord, a terminal, a doc, your browser — and hands back **the same real link,
 trimmed**.
 
-```
-https://www.amazon.com/dp/B08X?tag=aff-20&ref_=nb&psc=1
-                        ->  https://www.amazon.com/dp/B08X?psc=1
+![nudl removing three trackers from a copied Amazon link](docs/demo.gif)
 
+Note what *survives*: `psc=1` is a real parameter the link needs, so nudl leaves it alone. It
+strips only what it recognises as tracking, and nothing else.
+
+```
 https://l.facebook.com/l.php?u=https%3A%2F%2Fsite.com%2Fx&h=AT1
                         ->  https://site.com/x
 ```
 
+Redirect wrappers get unwrapped too — the output is the destination they were hiding.
+
 It is **not** a URL shortener. No alias, no server, no redirect — the output *is* the real
 destination, just shorter. The link can't rot, because it was never replaced.
+
+**Two ways to use it:** press a hotkey (`Ctrl+Alt+V`), or turn on automatic mode and every link
+is cleaned the moment you copy it, in any app.
 
 ## nudl never sends your URLs anywhere
 
