@@ -1,21 +1,29 @@
 {
   "$comment": [
-    "nudl's bundled rule set — hand-rolled, ~25 rules. Small on purpose: you are meant",
-    "to be able to read it. Adopts the ClearURLs SCHEMA SHAPE so a future migration stays",
-    "open, but bundles NONE of ClearURLs' rules data (its license is unverified).",
+    "nudl's bundled rule set — hand-rolled. Small on purpose: you are meant to be able to",
+    "read it. Adopts the ClearURLs SCHEMA SHAPE so a future migration stays open, but",
+    "bundles NONE of ClearURLs' rules data (its license is unverified).",
     "",
     "Key-pattern syntax (matched case-insensitively against the query KEY, never the value):",
     "  'fbclid'    exact key match",
     "  '^utm_.*$'  anchored regex (leading '^')",
     "  'pd_rd_*'   prefix glob (trailing '*')",
     "",
-    "DELIBERATELY ABSENT — both of these look like trackers and are not safe to strip:",
-    "  si       — Spotify/YouTube share id. Removing it has broken shared-playlist and",
-    "             'who invited you' flows. Kept everywhere.",
-    "  keywords — on Amazon this looks like a tracker, but amazon.com/s?keywords=... IS",
-    "             the search query; stripping it yields a blank search page. Breaking a",
-    "             link the user needed outranks removing a tracker. Add it back only with",
-    "             a path scope."
+    "DELIBERATELY ABSENT — these look like trackers and are NOT safe to strip. Each has a",
+    "tripwire test in tests/test_clean.py so nobody 'helpfully' adds them later:",
+    "  si         — Spotify/YouTube share id. Removing it has broken shared-playlist and",
+    "               'who invited you' flows. Kept everywhere.",
+    "  sk         — Medium FRIEND LINK token. Strip it and you paywall the article you were",
+    "               trying to share.",
+    "  hash       — eBay item identifier. Only the _trk* params there are tracking.",
+    "  img_index  — Instagram: which photo in the carousel.",
+    "  sid        — Booking.com session id.",
+    "  context    — Reddit: how many parent comments to show.",
+    "  keywords   — on Amazon this LOOKS like a tracker, but amazon.com/s?keywords=... IS",
+    "               the search query; stripping it yields a blank search page.",
+    "  check_in / check_out — Airbnb: the actual booking dates.",
+    "",
+    "Breaking a link the user needed always outranks removing a tracker."
   ],
 
   "global_tracker_keys": [
@@ -26,6 +34,13 @@
     "gbraid",
     "wbraid",
     "msclkid",
+    "ttclid",
+    "twclid",
+    "li_fat_id",
+    "yclid",
+    "rdt_cid",
+    "epik",
+    "_openstat",
     "mc_eid",
     "mc_cid",
     "igshid",
@@ -67,6 +82,11 @@
         "pf_rd_*",
         "qid",
         "sr",
+        "content-id",
+        "sprefix",
+        "crid",
+        "dib",
+        "dib_tag",
         "_encoding",
         "smid",
         "linkCode",
@@ -89,6 +109,128 @@
       "urlPattern": "(^|\\.)(twitter|x)\\.com$",
       "exceptions": [],
       "rules": ["s", "t", "ref_src", "ref_url"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "linkedin",
+      "urlPattern": "(^|\\.)linkedin\\.com$",
+      "exceptions": [],
+      "rules": ["trk", "trackingId", "lipi", "licu", "originalSubdomain"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "tiktok",
+      "urlPattern": "(^|\\.)tiktok\\.com$",
+      "exceptions": [],
+      "rules": ["is_from_webapp", "sender_device", "sender_web_id", "web_id", "refer"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "reddit",
+      "urlPattern": "(^|\\.)reddit\\.com$",
+      "exceptions": [],
+      "rules": ["share_id", "correlation_id", "ref", "ref_source", "rdt"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "substack",
+      "urlPattern": "(^|\\.)substack\\.com$",
+      "exceptions": [],
+      "rules": ["r", "triedRedirect", "showWelcome"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "ebay",
+      "urlPattern": "(^|\\.)ebay\\.",
+      "exceptions": [],
+      "rules": ["_trksid", "_trkparms", "_from", "amdata", "mkcid", "mkrid", "campid"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "etsy",
+      "urlPattern": "(^|\\.)etsy\\.com$",
+      "exceptions": [],
+      "rules": ["click_key", "click_sum", "ref", "frs", "sts", "organic_search_click"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "twitch",
+      "urlPattern": "(^|\\.)twitch\\.tv$",
+      "exceptions": [],
+      "rules": ["tt_content", "tt_medium", "tt_email_id"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "steam",
+      "urlPattern": "(^|\\.)steamcommunity\\.com$|(^|\\.)steampowered\\.com$",
+      "exceptions": [],
+      "rules": ["snr"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "nytimes",
+      "urlPattern": "(^|\\.)nytimes\\.com$",
+      "exceptions": [],
+      "rules": ["smid", "smtyp"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "guardian",
+      "urlPattern": "(^|\\.)theguardian\\.com$",
+      "exceptions": [],
+      "rules": ["CMP"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "aliexpress",
+      "urlPattern": "(^|\\.)aliexpress\\.",
+      "exceptions": [],
+      "rules": [
+        "spm",
+        "scm",
+        "scm_id",
+        "scm-url",
+        "algo_pvid",
+        "algo_exp_id",
+        "pdp_ext_f",
+        "pdp_npi",
+        "curPageLogUid",
+        "gatewayAdapt",
+        "btsid",
+        "ws_ab_test"
+      ],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "booking",
+      "urlPattern": "(^|\\.)booking\\.com$",
+      "exceptions": [],
+      "rules": ["aid", "label", "sb_price_type", "srpvid", "from_sn", "soz", "lang_click"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "airbnb",
+      "urlPattern": "(^|\\.)airbnb\\.",
+      "exceptions": [],
+      "rules": [
+        "source_impression_id",
+        "previous_page_section_name",
+        "federated_search_id",
+        "search_mode"
+      ],
       "rawRules": [],
       "referral": []
     }

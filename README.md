@@ -93,15 +93,22 @@ exactly what you should be suspicious of.
 
 ## What it removes
 
-The whole rule set is one readable file, [`src/rules.json`](src/rules.json) — about 25 rules.
-You're meant to read it. Edit it freely; if you break it, nudl falls back to the bundled
-defaults rather than failing.
+**[The full list is here.](docs/RULES.md)** Every parameter nudl touches, and — just as
+importantly — the ones it deliberately won't.
 
-- **Tracking params:** `utm_*`, `fbclid`, `gclid`, `dclid`, `gbraid`, `wbraid`, `msclkid`,
-  `mc_cid`, `mc_eid`, `igshid`, `_hsenc`, `mkt_tok`, and friends.
-- **Amazon:** `tag`, `ref_`, `ref`, `pd_rd_*`, `pf_rd_*`, `qid`, `sr`.
-- **Redirect wrappers:** `l.facebook.com/l.php`, `google.com/url`, `out.reddit.com`,
-  `steamcommunity.com/linkfilter`, `t.umblr.com/redirect`.
+The short version: `utm_*`, `fbclid`, `gclid`, `msclkid` and the other cross-site click IDs
+everywhere; site-specific junk from Amazon, LinkedIn, TikTok, Reddit, eBay, Etsy, AliExpress,
+Booking, Airbnb, Substack, Twitch, Steam and more; and the redirect wrappers
+(`l.facebook.com/l.php`, `google.com/url`, …) get unwrapped to the real destination.
+
+**What it won't remove** is the interesting half. Medium's `?sk=` looks like a tracker but is
+a *friend link* — strip it and you paywall the article you were sharing. eBay's `hash=`
+identifies the item. Instagram's `img_index=` picks which photo. Amazon's `keywords=` **is**
+the search. Each of those has a test guarding it, because breaking a link the user needed
+always outranks removing a tracker.
+
+The rule set is one readable file, [`src/rules.json`](src/rules.json). Edit it freely; if you
+break it, nudl falls back to the bundled defaults rather than failing.
 
 Domains you never want touched go in `exceptions` in `%AppData%\nudl\config.json`. That's a
 list *you* write; nudl just compares hostnames against it locally.

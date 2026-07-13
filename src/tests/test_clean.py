@@ -283,6 +283,118 @@ CORPUS: list[tuple[str, str, str]] = [
         "https://user:pw@example.com:8443/a?utm_source=x&id=1",
         "https://user:pw@example.com:8443/a?id=1",
     ),
+    # -- The share buttons people actually copy from ----------------------------------
+    (
+        "amazon share-button payload (content-id, sprefix, crid)",
+        "https://www.amazon.com/dp/B08X?content-id=amzn1.sym.abc&sprefix=usb%2Caps&crid=2ABC&psc=1",
+        "https://www.amazon.com/dp/B08X?psc=1",
+    ),
+    (
+        "linkedin share",
+        "https://www.linkedin.com/posts/someone_activity-123"
+        "?utm_source=share&utm_medium=member_desktop&trk=public_post",
+        "https://www.linkedin.com/posts/someone_activity-123",
+    ),
+    (
+        "tiktok share",
+        "https://www.tiktok.com/@user/video/123?is_from_webapp=1&sender_device=pc",
+        "https://www.tiktok.com/@user/video/123",
+    ),
+    (
+        "reddit share",
+        "https://www.reddit.com/r/python/comments/abc/title/"
+        "?share_id=xyz&utm_source=share&utm_medium=web2x",
+        "https://www.reddit.com/r/python/comments/abc/title/",
+    ),
+    (
+        "substack",
+        "https://example.substack.com/p/post?r=abc123&utm_campaign=post&triedRedirect=true",
+        "https://example.substack.com/p/post",
+    ),
+    (
+        "ebay tracking params",
+        "https://www.ebay.com/itm/123456?_trksid=p2047675&_trkparms=abc&hash=item2a1b",
+        "https://www.ebay.com/itm/123456?hash=item2a1b",
+    ),
+    (
+        "etsy",
+        "https://www.etsy.com/listing/123/thing?click_key=abc&click_sum=def&ref=hp_rv&frs=1",
+        "https://www.etsy.com/listing/123/thing",
+    ),
+    (
+        "twitch",
+        "https://www.twitch.tv/somestreamer?tt_content=text_link&tt_medium=live_embed",
+        "https://www.twitch.tv/somestreamer",
+    ),
+    (
+        "steam snr",
+        "https://store.steampowered.com/app/440/Team_Fortress_2/?snr=1_7_7_230_150_1",
+        "https://store.steampowered.com/app/440/Team_Fortress_2/",
+    ),
+    (
+        "nyt share id",
+        "https://www.nytimes.com/2026/01/01/us/article.html?smid=url-share&smtyp=cur",
+        "https://www.nytimes.com/2026/01/01/us/article.html",
+    ),
+    (
+        "guardian CMP",
+        "https://www.theguardian.com/world/2026/jan/01/story?CMP=Share_iOSApp_Other",
+        "https://www.theguardian.com/world/2026/jan/01/story",
+    ),
+    (
+        "aliexpress spm soup",
+        "https://www.aliexpress.com/item/123.html"
+        "?spm=a2g0o.detail&algo_pvid=abc&pdp_npi=xyz&gatewayAdapt=glo2usa",
+        "https://www.aliexpress.com/item/123.html",
+    ),
+    (
+        "airbnb impression ids stripped, dates kept",
+        "https://www.airbnb.com/rooms/123"
+        "?source_impression_id=p3_abc&federated_search_id=xyz"
+        "&check_in=2026-08-01&check_out=2026-08-05",
+        "https://www.airbnb.com/rooms/123?check_in=2026-08-01&check_out=2026-08-05",
+    ),
+    (
+        "cross-site click ids ride along to the destination site",
+        "https://example.com/p?ttclid=a&twclid=b&li_fat_id=c&yclid=d&epik=e&id=9",
+        "https://example.com/p?id=9",
+    ),
+    # -- TRIPWIRES: these LOOK like trackers and stripping them breaks the link --------
+    (
+        "TRIPWIRE: Medium's ?sk= is a FRIEND LINK — strip it and you paywall the article",
+        "https://medium.com/@writer/an-article-abc123?sk=9f8e7d6c5b4a",
+        "https://medium.com/@writer/an-article-abc123?sk=9f8e7d6c5b4a",
+    ),
+    (
+        "TRIPWIRE: eBay's ?hash= identifies the ITEM; only the _trk* params are tracking",
+        "https://www.ebay.com/itm/123?hash=item2a1b3c",
+        "https://www.ebay.com/itm/123?hash=item2a1b3c",
+    ),
+    (
+        "TRIPWIRE: Instagram's img_index picks WHICH photo in the carousel",
+        "https://www.instagram.com/p/abc/?igshid=xyz&img_index=3",
+        "https://www.instagram.com/p/abc/?img_index=3",
+    ),
+    (
+        "TRIPWIRE: Booking's sid is a session id; only aid (the affiliate tag) goes",
+        "https://www.booking.com/hotel/gb/x.html?aid=1234567&sid=abcdef123456",
+        "https://www.booking.com/hotel/gb/x.html?sid=abcdef123456",
+    ),
+    (
+        "TRIPWIRE: Reddit's ?context= is how many parent comments to show",
+        "https://www.reddit.com/r/x/comments/a/b/c/?context=3&share_id=zzz",
+        "https://www.reddit.com/r/x/comments/a/b/c/?context=3",
+    ),
+    (
+        "TRIPWIRE: Airbnb check_in/check_out ARE the booking",
+        "https://www.airbnb.com/rooms/9?check_in=2026-08-01&check_out=2026-08-05",
+        "https://www.airbnb.com/rooms/9?check_in=2026-08-01&check_out=2026-08-05",
+    ),
+    (
+        "TRIPWIRE: YouTube 'si' survives even sitting next to a stripped 'feature'",
+        "https://youtu.be/abc?si=xyz&feature=share",
+        "https://youtu.be/abc?si=xyz",
+    ),
 ]
 
 
