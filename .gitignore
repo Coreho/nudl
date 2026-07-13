@@ -1,0 +1,24 @@
+# Dependencies / build output
+node_modules/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local app data (nudl writes config/logs here at runtime)
+AppData/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+
+# Local-only runtime artifacts
+clean.log
+config.json
+rules.json
