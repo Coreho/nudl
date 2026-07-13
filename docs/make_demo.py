@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from src.clean import clean_result
 
-OUT = Path(r"C:\Users\Coreh\nudl\docs\demo.gif")
+OUT = Path(__file__).resolve().parent / "demo.gif"
 OUT.parent.mkdir(parents=True, exist_ok=True)
 
 W, H = 900, 360

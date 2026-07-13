@@ -395,6 +395,26 @@ CORPUS: list[tuple[str, str, str]] = [
         "https://youtu.be/abc?si=xyz&feature=share",
         "https://youtu.be/abc?si=xyz",
     ),
+    (
+        "TRIPWIRE: a ';' makes the pair ambiguous — dropping it could destroy 'id=5'",
+        "https://example.com/a?fbclid=x;id=5",
+        "https://example.com/a?fbclid=x;id=5",
+    ),
+    (
+        "TRIPWIRE: ...but an unambiguous tracker beside it still goes",
+        "https://example.com/a?fbclid=x;id=5&utm_source=nl&page=2",
+        "https://example.com/a?fbclid=x;id=5&page=2",
+    ),
+    (
+        "TRIPWIRE: a ';' inside a KEPT param is none of our business",
+        "https://example.com/a?filter=a;b;c&utm_source=nl",
+        "https://example.com/a?filter=a;b;c",
+    ),
+    (
+        "wrapper param matching is case-insensitive",
+        "https://l.facebook.com/l.php?U=https%3A%2F%2Fsite.com%2Fx",
+        "https://site.com/x",
+    ),
 ]
 
 

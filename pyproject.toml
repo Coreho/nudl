@@ -14,6 +14,15 @@ dependencies = [
 dev = ["pytest>=8", "ruff>=0.6"]
 build = ["pyinstaller>=6"]
 
+# Without these, `pip install nudl` installs a package with no way to start it.
+# `nudlw` is the windowed entry point (no console window); `nudl` keeps a console,
+# which is what you want when something is going wrong.
+[project.scripts]
+nudl = "src.app:main"
+
+[project.gui-scripts]
+nudlw = "src.app:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
@@ -28,6 +37,10 @@ src = ["rules.json"]
 testpaths = ["src/tests"]
 pythonpath = ["."]
 addopts = "-q"
+# The cleaning engine is pure Python and runs anywhere. The Win32 tests obviously do
+# not, and they must SKIP off-Windows rather than blow up at collection — otherwise a
+# contributor on Linux cannot run the suite that matters at all.
+markers = ["windows: requires Win32 APIs"]
 
 [tool.ruff]
 line-length = 100

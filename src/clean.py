@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -30,6 +31,8 @@ from typing import Any
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 __all__ = ["CleanResult", "clean", "clean_result", "load_rules"]
+
+logger = logging.getLogger(__name__)
 
 BUNDLED_RULES_PATH = Path(__file__).with_name("rules.json")
 
@@ -64,11 +67,36 @@ class CleanResult:
 # ---------------------------------------------------------------------------------------
 
 
-def load_rules(path: str | Path | None = None) -> dict[str, Any]:
-    """Load a rule set, falling back to the bundled defaults if anything is wrong (FR-013).
+#: The last line of defence. If even the bundled rules.json cannot be read — a broken
+#: install, a corrupted package — nudl must still clean the obvious offenders rather than
+#: silently cleaning nothing. Silently doing nothing is the failure mode a user would
+#: never notice, and "it quietly stopped working" is worse than "it does less".
+EMERGENCY_RULES: dict[str, Any] = {
+    "global_tracker_keys": [
+        "^utm_.*$",
+        "fbclid",
+        "gclid",
+        "dclid",
+        "gbraid",
+        "wbraid",
+        "msclkid",
+        "igshid",
+        "mc_eid",
+        "mc_cid",
+    ],
+    "redirect_wrappers": [],
+    "referral": [],
+    "providers": [],
+}
 
-    A user who corrupts their own rules.json gets a working nudl on defaults, not a
-    crash and not a nudl that silently stops cleaning.
+_RULE_LIST_KEYS = ("global_tracker_keys", "redirect_wrappers", "providers", "referral")
+
+
+def load_rules(path: str | Path | None = None) -> dict[str, Any]:
+    """Load a rule set, falling back to the bundled defaults if anything is wrong.
+
+    A user who corrupts their own rules.json gets a working nudl on defaults — not a
+    crash, and not a nudl that silently stops cleaning.
     """
     if path is not None:
         with contextlib.suppress(OSError, ValueError):  # fall through to bundled defaults
@@ -80,16 +108,34 @@ def load_rules(path: str | Path | None = None) -> dict[str, Any]:
 
 
 def _rules_are_sane(rules: object) -> bool:
-    return isinstance(rules, dict) and any(
-        isinstance(rules.get(k), list)
-        for k in ("global_tracker_keys", "redirect_wrappers", "providers")
-    )
+    """Reject a rule set that would blow up later.
+
+    Checking only that *some* key is a list is not enough: `{"global_tracker_keys": [],
+    "providers": "oops"}` would pass, then raise deep inside the pipeline on every single
+    URL. The fail-safe would swallow it and nudl would quietly clean nothing at all —
+    exactly the silent failure this project refuses to have. So every key that IS present
+    must be the right shape.
+    """
+    if not isinstance(rules, dict):
+        return False
+    for key in _RULE_LIST_KEYS:
+        if key in rules and not isinstance(rules[key], list):
+            return False
+    return any(key in rules for key in _RULE_LIST_KEYS)
 
 
 @lru_cache(maxsize=1)
 def _bundled_rules() -> dict[str, Any]:
-    with open(BUNDLED_RULES_PATH, encoding="utf-8") as fh:
-        return json.load(fh)
+    try:
+        with open(BUNDLED_RULES_PATH, encoding="utf-8") as fh:
+            rules = json.load(fh)
+    except (OSError, ValueError):
+        logger.error("bundled rules.json is unreadable; falling back to emergency rules")
+        return EMERGENCY_RULES
+    if not _rules_are_sane(rules):
+        logger.error("bundled rules.json is malformed; falling back to emergency rules")
+        return EMERGENCY_RULES
+    return rules
 
 
 # ---------------------------------------------------------------------------------------
@@ -172,6 +218,27 @@ def _raw_pairs(query: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _is_ambiguous(raw_pair: str) -> bool:
+    """True if we cannot be certain where this pair ends — so we must not drop it.
+
+    Query strings are split on `&`, but some servers (classic PHP, some Java stacks)
+    ALSO accept `;` as a separator. That makes `?fbclid=x;id=5` genuinely ambiguous:
+
+      * to a modern parser it is ONE param, `fbclid` = `"x;id=5"`
+      * to a `;`-accepting server it is TWO, and `id=5` is functional
+
+    Dropping the whole blob because its key matched a tracker would destroy `id=5` on
+    every server of the second kind — nudl breaking a link, which is the one thing it
+    must never do. Splitting on `;` instead would invent an `id` param on servers of
+    the first kind, which is just a different way of being wrong.
+
+    There is no interpretation that is safe in both worlds, so we take the fail-safe:
+    when a pair we were about to strip contains a `;`, leave it alone. The cost is one
+    missed tracker. The alternative cost is a broken link.
+    """
+    return ";" in raw_pair
+
+
 def _is_signed(query: str) -> bool:
     for key, _ in _raw_pairs(query):
         low = key.lower()
@@ -213,9 +280,9 @@ def _wrapper_target(parts: Any, rules: dict[str, Any]) -> str | None:
             continue
         if not parts.path.startswith(wrapper.get("path", "/")):
             continue
-        param = wrapper.get("param")
+        param = str(wrapper.get("param", "")).lower()
         for key, raw in _raw_pairs(parts.query):
-            if key != param:
+            if key.lower() != param:
                 continue
             # unquote(), never unquote_plus(): a '+' inside an encoded URL is a literal
             # plus, not a space.
@@ -332,7 +399,7 @@ def _clean_result(
     patterns = _tracker_patterns(host, rules, strip_referral)
     kept: list[str] = []
     for key, raw in _raw_pairs(parts.query):
-        if key and _matches_any(key, patterns):
+        if key and _matches_any(key, patterns) and not _is_ambiguous(raw):
             removed.append(key)
         else:
             kept.append(raw)

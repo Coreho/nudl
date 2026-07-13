@@ -5,10 +5,39 @@ That only works if a human can actually read it. These tests pin the layout.
 
 from __future__ import annotations
 
-from src.app import format_log_entry
+from src.app import format_log_entry, redact
 from src.clean import CleanResult
 
 STAMP = "2026-07-13 01:09:16"
+
+
+def test_credentials_are_redacted_before_they_hit_disk() -> None:
+    """The audit log is plaintext and lives forever. A URL can legally carry a password.
+
+    Logging it would turn nudl's trust feature into a credential leak.
+    """
+    entry = format_log_entry(
+        CleanResult(
+            original="https://alice:hunter2@intranet.corp/doc?utm_source=x&id=1",
+            result="https://alice:hunter2@intranet.corp/doc?id=1",
+            params_removed=["utm_source"],
+        ),
+        STAMP,
+    )
+    assert "hunter2" not in entry
+    assert "alice" not in entry
+    assert "***@intranet.corp" in entry
+    assert "id=1" in entry  # the log still has to be useful
+
+
+def test_redact_leaves_ordinary_urls_alone() -> None:
+    url = "https://example.com/a?id=1"
+    assert redact(url) == url
+
+
+def test_redact_survives_junk() -> None:
+    assert redact("not a url") == "not a url"
+    assert redact("") == ""
 
 
 def test_a_normal_clean_reads_as_english() -> None:

@@ -24,6 +24,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import win32api
 import win32con
@@ -72,6 +73,24 @@ LOG_HEADER = """\
 """
 
 
+def redact(url: str) -> str:
+    """Strip credentials out of a URL before it is written to disk.
+
+    `https://user:hunter2@host/x` is a perfectly legal URL, and the audit log is an
+    append-only plaintext file that lives forever. Logging the password would turn a
+    trust feature into a credential leak. The rest of the URL is left exactly as it is —
+    the log has to stay useful.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.netloc or "@" not in parts.netloc:
+        return url
+    _credentials, _, host = parts.netloc.rpartition("@")
+    return urlunsplit((parts.scheme, f"***@{host}", parts.path, parts.query, parts.fragment))
+
+
 def format_log_entry(result: clean.CleanResult, stamp: str) -> str:
     """One human-readable block per change.
 
@@ -87,7 +106,8 @@ def format_log_entry(result: clean.CleanResult, stamp: str) -> str:
     else:
         headline = "unwrapped a redirect"
 
-    return f"[{stamp}]  {headline}\n    before  {result.original}\n    after   {result.result}\n\n"
+    before, after = redact(result.original), redact(result.result)
+    return f"[{stamp}]  {headline}\n    before  {before}\n    after   {after}\n\n"
 
 
 @dataclass(frozen=True)
@@ -100,13 +120,22 @@ class LastClean:
 class NudlApp:
     def __init__(self) -> None:
         self.config = config.load()
-        self.rules = clean.load_rules(config.rules_path())
+        # Honour the configured rules_path. It was previously advertised in config.json
+        # and then ignored, which is worse than not offering it at all.
+        self.rules = clean.load_rules(config.config_dir() / self.config["rules_path"])
         self.ui = OverlayUI()
         self.window: MessageWindow | None = None
 
         self._lock = threading.Lock()
         self._last_clean: LastClean | None = None
         self._own_write = clipboard.OwnWriteGuard()
+
+        # Clipboard writes come from two threads: the pump (a clean) and the Tk thread
+        # (the toast's Undo button). arm -> write -> confirm must be atomic as a unit, or
+        # an interleaved clean and undo can arm the guard with one text and confirm it
+        # with the other's sequence number — and the auto-watcher would then re-clean the
+        # link the user just undid.
+        self._write_lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -136,30 +165,45 @@ class NudlApp:
         config.save(self.config)
 
     def _pump(self) -> None:
-        self.window = MessageWindow()
-        self.window.on(win32con.WM_HOTKEY, lambda _w, _l: self.on_hotkey())
-        self.window.on(clipboard.WM_CLIPBOARDUPDATE, lambda _w, _l: self.on_clipboard_update())
+        """Own the Win32 window, the hotkey and the clipboard listener, for their lifetime.
 
+        Registration AND cleanup both happen here, on this thread, deliberately:
+        `UnregisterHotKey` only frees a hotkey registered by the *calling* thread, so
+        tearing it down from the tray thread would fail silently and leak the chord.
+        """
         try:
-            hotkey.register(self.window.hwnd, HOTKEY_ID, self.config["hotkey"])
-        except (hotkey.InvalidHotkey, hotkey.HotkeyUnavailable) as exc:
-            # Losing the hotkey is survivable — the tray still works — but the user has
-            # to be told, or nudl looks silently broken.
-            logger.error("hotkey unavailable: %s", exc)
-            self.ui.show_toast(f"nudl — {exc}. Pick another in Settings.", seconds=10)
+            self.window = MessageWindow()
+            self.window.on(win32con.WM_HOTKEY, lambda _w, _l: self.on_hotkey())
+            self.window.on(clipboard.WM_CLIPBOARDUPDATE, lambda _w, _l: self.on_clipboard_update())
 
-        # The listener is registered once and left in place for the life of the process;
-        # the handler simply does nothing when the mode is "hotkey". Registering and
-        # unregistering it on every mode switch would mean touching Win32 state from the
-        # tray thread, and buys nothing — an ignored message costs microseconds.
-        clipboard.add_format_listener(self.window.hwnd)
+            try:
+                hotkey.register(self.window.hwnd, HOTKEY_ID, self.config["hotkey"])
+            except (hotkey.InvalidHotkey, hotkey.HotkeyUnavailable) as exc:
+                # Losing the hotkey is survivable — the tray still works — but the user
+                # has to be told, or nudl looks silently broken.
+                logger.error("hotkey unavailable: %s", exc)
+                self.ui.show_toast(f"nudl — {exc}. Pick another in Settings.", seconds=10)
 
-        self.window.pump()
+            # The listener is registered once and left in place for the life of the
+            # process; the handler simply does nothing when the mode is "hotkey".
+            clipboard.add_format_listener(self.window.hwnd)
+
+            self.window.pump()  # blocks until stop()
+        except Exception:  # noqa: BLE001
+            # Without this, an unexpected failure kills the pump thread silently and both
+            # the hotkey and auto-watch stop working while the tray icon sits there
+            # looking perfectly healthy.
+            logger.exception("the message pump died")
+            self.ui.show_toast("nudl — stopped responding. Restart it.", seconds=10)
+        finally:
+            if self.window is not None:
+                hotkey.unregister(self.window.hwnd, HOTKEY_ID)
+                clipboard.remove_format_listener(self.window.hwnd)
 
     def _shutdown(self) -> None:
+        # Only ASK the pump to stop; it unregisters its own hotkey and listener on the
+        # thread that owns them (see _pump's finally).
         if self.window is not None:
-            hotkey.unregister(self.window.hwnd, HOTKEY_ID)
-            clipboard.remove_format_listener(self.window.hwnd)
             self.window.stop()
         self.ui.stop()
 
@@ -170,9 +214,11 @@ class NudlApp:
         if self.config["mode"] != "auto":
             return
 
-        sequence = clipboard.sequence_number()
         try:
-            text = clipboard.get_text()
+            # Read both under one clipboard lock. Fetching them separately leaves a
+            # window for another process to change the clipboard in between, which would
+            # pair a stale sequence number with fresh text.
+            text, sequence = clipboard.get_text_and_sequence()
         except clipboard.ClipboardBusy:
             return  # someone else holds the lock; leave their clipboard alone
 
@@ -193,7 +239,14 @@ class NudlApp:
         if self._undo_if_pending():
             return
 
-        text = clipboard.get_text()
+        try:
+            text = clipboard.get_text()
+        except clipboard.ClipboardBusy:
+            # The user pressed the hotkey and something has to happen. Silence here reads
+            # as "nudl is broken".
+            self.ui.show_toast("nudl — clipboard busy, try again", seconds=3)
+            return
+
         url = clipboard.as_single_url(text)
         if url is None:
             self.ui.show_toast("nudl — no link on the clipboard", seconds=3)
@@ -227,13 +280,20 @@ class NudlApp:
 
         Arm before the write, confirm after: a clipboard write nudl doesn't recognise as
         its own would be re-cleaned by the auto-watcher, forever.
+
+        If the write FAILS, the guard must be disarmed. Otherwise it stays armed with
+        text that never reached the clipboard — and the next time the user copies that
+        same link by hand, nudl would mistake it for its own echo and refuse to clean it.
+        A failed write must not poison the next one.
         """
-        self._own_write.arm(text)
-        try:
-            self._own_write.confirm(clipboard.set_text(text))
-        except clipboard.ClipboardBusy:
-            logger.warning("could not write the clipboard; another process holds the lock")
-            return False
+        with self._write_lock:
+            self._own_write.arm(text)
+            try:
+                self._own_write.confirm(clipboard.set_text(text))
+            except Exception:  # noqa: BLE001 — busy clipboard, or any win32 failure
+                logger.warning("could not write the clipboard", exc_info=True)
+                self._own_write.disarm()
+                return False
         return True
 
     @staticmethod
@@ -342,6 +402,10 @@ def acquire_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> int | None:
     """
     handle = win32event.CreateMutex(None, False, name)
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        # CreateMutex hands back a valid handle to the EXISTING mutex even when it
+        # already exists. Dropping it on the floor leaks a kernel handle every call.
+        if handle:
+            win32api.CloseHandle(handle)
         return None
     return handle
 

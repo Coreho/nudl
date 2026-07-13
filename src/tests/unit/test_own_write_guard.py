@@ -79,6 +79,37 @@ def test_consecutive_writes_track_the_latest() -> None:
     assert guard.is_own_write(101, "second") is True
 
 
+def test_a_FAILED_write_must_not_poison_the_guard() -> None:
+    """The bug: arm, then the clipboard write fails. The guard stays armed.
+
+    Later the user copies that exact link by hand. The guard matches, nudl thinks it's
+    its own echo, and refuses to clean it — a link that can never be cleaned, because of
+    a write that never happened. `disarm()` is what makes a failed write harmless.
+    """
+    guard = OwnWriteGuard()
+    guard.arm(CLEAN)
+    # ... clipboard.set_text() raises ClipboardBusy here; nothing reached the clipboard.
+    guard.disarm()
+
+    assert guard.is_own_write(500, CLEAN) is False, "a failed write poisoned the guard"
+
+
+def test_confirm_after_a_match_does_not_re_arm() -> None:
+    """The race that `confirm`'s early return closes.
+
+    Undo writes from the Tk thread. The pump thread can process the echo — and match it
+    by text — before `confirm()` records the sequence number. If `confirm()` then wrote
+    that sequence number in anyway, the guard would be left armed with a stale number.
+    """
+    guard = OwnWriteGuard()
+    guard.arm(CLEAN)
+    assert guard.is_own_write(999, CLEAN) is True  # matched by text, guard consumed
+
+    guard.confirm(999)  # the late confirm from the write that already echoed
+
+    assert guard.is_own_write(999, CLEAN) is False, "confirm re-armed a consumed guard"
+
+
 def test_rapid_copies_never_loop() -> None:
     """Simulate the copy -> clean -> echo cycle ten times over.
 

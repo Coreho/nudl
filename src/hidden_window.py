@@ -10,6 +10,7 @@ The window and its pump must live on the same thread — see `MessageWindow.pump
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable
 
@@ -29,9 +30,11 @@ class MessageWindow:
 
     def __init__(self, class_name: str = "nudlMessageWindow") -> None:
         self._handlers: dict[int, list[Handler]] = {}
+        self.class_name = f"{class_name}_{id(self)}"
+        self._class_unregistered = False
 
         wndclass = win32gui.WNDCLASS()
-        wndclass.lpszClassName = class_name
+        wndclass.lpszClassName = self.class_name
         wndclass.lpfnWndProc = self._wnd_proc
         wndclass.hInstance = win32api.GetModuleHandle(None)
         self._atom = win32gui.RegisterClass(wndclass)
@@ -39,7 +42,7 @@ class MessageWindow:
         self.hwnd: int = win32gui.CreateWindowEx(
             0,
             self._atom,
-            class_name,
+            self.class_name,
             0,
             0,
             0,
@@ -69,11 +72,36 @@ class MessageWindow:
 
     def pump(self) -> None:
         """Run the message loop. Blocks until `stop()`. Call on the owning thread."""
-        win32gui.PumpMessages()
+        try:
+            win32gui.PumpMessages()
+        finally:
+            self.close()
 
     def stop(self) -> None:
         """Ask the pump to exit. Safe to call from any thread."""
         try:
-            win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
+            if self.hwnd:
+                win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
         except Exception:  # noqa: BLE001 — already torn down
             logger.debug("stop() on an already-closed window", exc_info=True)
+
+    def close(self) -> None:
+        """Destroy the window and unregister its class. Idempotent.
+
+        MUST be called on the thread that created the window — `DestroyWindow` is
+        thread-affine. `pump()` calls this in its `finally`, which is exactly that
+        thread. There is deliberately no `__del__`: the garbage collector runs on
+        whatever thread it likes, and calling DestroyWindow from the wrong one is a
+        crash waiting for a quiet afternoon.
+        """
+        if self.hwnd:
+            with contextlib.suppress(Exception):
+                win32gui.DestroyWindow(self.hwnd)
+            self.hwnd = 0
+
+        if not self._class_unregistered:
+            try:
+                win32gui.UnregisterClass(self.class_name, win32api.GetModuleHandle(None))
+                self._class_unregistered = True
+            except Exception:  # noqa: BLE001 — a leaked class atom is survivable
+                logger.debug("could not unregister class %s", self.class_name, exc_info=True)

@@ -14,6 +14,7 @@ thread) just call `show_toast()` / `ask_mode()` from wherever they are.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import logging
 import queue
 import threading
@@ -21,6 +22,27 @@ import tkinter as tk
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+_GWL_EXSTYLE = -20
+_WS_EX_NOACTIVATE = 0x08000000
+_WS_EX_TOPMOST = 0x00000008
+
+
+def _no_activate(win: tk.Toplevel) -> None:
+    """Stop the toast from stealing focus.
+
+    A popup that grabs focus while you are mid-sentence is worse than no popup: nudl is
+    supposed to be a tool you forget is running. WS_EX_NOACTIVATE tells Windows to show
+    the window without ever making it the active one.
+    """
+    try:
+        hwnd = int(win.frame(), 16)  # Tk gives the HWND as a hex string on Windows
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+        user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style | _WS_EX_NOACTIVATE | _WS_EX_TOPMOST)
+    except Exception:  # noqa: BLE001 — cosmetic; never break the toast over this
+        logger.debug("could not apply WS_EX_NOACTIVATE", exc_info=True)
+
 
 _BG = "#16181d"
 _FG = "#e8eaed"
@@ -136,13 +158,23 @@ class OverlayUI:
         y = win.winfo_screenheight() - win.winfo_height() - 72
         win.geometry(f"+{x}+{y}")
 
-        win.after(int(seconds * 1000), self._destroy_toast)
+        _no_activate(win)
+
+        # Dismiss THIS window, not "whatever is current". Tk keeps an `after` timer alive
+        # even after its widget is destroyed, so an expiring timer from a replaced toast
+        # would otherwise kill the toast that replaced it — taking its Undo button with
+        # it, seconds after it appeared.
+        win.after(int(seconds * 1000), lambda: self._dismiss(win))
+
+    def _dismiss(self, win: tk.Toplevel) -> None:
+        with contextlib.suppress(tk.TclError):  # already gone
+            win.destroy()
+        if self._toast is win:
+            self._toast = None
 
     def _destroy_toast(self) -> None:
         if self._toast is not None:
-            with contextlib.suppress(tk.TclError):  # already gone
-                self._toast.destroy()
-            self._toast = None
+            self._dismiss(self._toast)
 
     # -- first-run mode picker ---------------------------------------------------
 

@@ -8,6 +8,7 @@ retries with backoff, and a genuine failure is reported rather than crashing the
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 import logging
 import threading
 import time
@@ -28,16 +29,22 @@ WM_CLIPBOARDUPDATE = 0x031D
 
 _user32 = ctypes.windll.user32
 
+# Configure types for robustness on 64-bit platforms
+_user32.AddClipboardFormatListener.argtypes = [ctypes.wintypes.HWND]
+_user32.AddClipboardFormatListener.restype = ctypes.wintypes.BOOL
+_user32.RemoveClipboardFormatListener.argtypes = [ctypes.wintypes.HWND]
+_user32.RemoveClipboardFormatListener.restype = ctypes.wintypes.BOOL
+
 
 class ClipboardBusy(RuntimeError):
     """Another process held the clipboard lock for longer than we were willing to wait."""
 
 
 @contextmanager
-def _opened() -> Iterator[None]:
+def _opened(hwnd: int = 0) -> Iterator[None]:
     for attempt in range(_OPEN_ATTEMPTS):
         try:
-            win32clipboard.OpenClipboard()
+            win32clipboard.OpenClipboard(hwnd)
             break
         except Exception:  # noqa: BLE001 — pywin32 raises a bare win32 error
             time.sleep(_OPEN_BACKOFF_SECONDS * (attempt + 1))
@@ -64,21 +71,34 @@ def sequence_number() -> int:
 
 def get_text() -> str | None:
     """The clipboard's Unicode text, or None if it holds something else (or nothing)."""
+    if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+        return None
     with _opened():
-        if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-            return None
         try:
             return win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
         except (TypeError, OSError):
             return None
 
 
-def set_text(text: str) -> int:
-    """Replace the clipboard with `text`. Returns the resulting sequence number."""
+def get_text_and_sequence() -> tuple[str | None, int]:
+    """Atomically retrieve the text and the sequence number while holding the lock."""
+    if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+        return None, sequence_number()
     with _opened():
+        seq = sequence_number()
+        try:
+            text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+            return text, seq
+        except (TypeError, OSError):
+            return None, seq
+
+
+def set_text(text: str, hwnd: int = 0) -> int:
+    """Replace the clipboard with `text`. Returns the resulting sequence number."""
+    with _opened(hwnd):
         win32clipboard.EmptyClipboard()
         win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
-    return sequence_number()
+        return sequence_number()
 
 
 def add_format_listener(hwnd: int) -> bool:
@@ -130,9 +150,17 @@ class OwnWriteGuard:
         with self._lock:
             self._text = text
 
+    def disarm(self) -> None:
+        """Release the armed state if the write was aborted or failed."""
+        with self._lock:
+            self._text = None
+            self._sequence = None
+
     def confirm(self, sequence: int) -> None:
         """Call immediately AFTER the write, with the resulting sequence number."""
         with self._lock:
+            if self._text is None:
+                return  # already matched and cleared by is_own_write
             self._sequence = sequence
 
     def is_own_write(self, sequence: int, text: str | None) -> bool:
