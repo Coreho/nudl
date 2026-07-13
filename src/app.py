@@ -54,8 +54,40 @@ SINGLE_INSTANCE_MUTEX = "nudl-single-instance-mutex"
 #: Press the hotkey again within this many seconds of a clean to undo it.
 UNDO_WINDOW_SECONDS = 3.0
 
-#: Rotate the audit log at this size (a fuller rotation scheme lands in CP3).
+#: Rotate the audit log at this size.
 LOG_MAX_BYTES = 512 * 1024
+
+#: The log exists so a suspicious user can audit exactly what nudl did — which means a
+#: human has to be able to read it. It opens in Notepad, so it is laid out for Notepad:
+#: one block per change, the before and the after stacked so the difference is obvious
+#: at a glance. Plain ASCII throughout, because a stray "·" renders as mojibake in half
+#: the editors on Windows.
+LOG_HEADER = """\
+# nudl - every link nudl has changed on this machine.
+#
+# Links nudl left alone are not recorded. Nothing in this file has ever left
+# your computer.
+#
+
+"""
+
+
+def format_log_entry(result: clean.CleanResult, stamp: str) -> str:
+    """One human-readable block per change.
+
+    [2026-07-13 01:09:16]  removed 2 trackers: tag, ref_
+        before  https://www.amazon.com/dp/B08X?tag=aff-20&ref_=nb&psc=1
+        after   https://www.amazon.com/dp/B08X?psc=1
+    """
+    count = len(result.params_removed)
+    if count == 1:
+        headline = f"removed 1 tracker: {result.params_removed[0]}"
+    elif count > 1:
+        headline = f"removed {count} trackers: {', '.join(result.params_removed)}"
+    else:
+        headline = "unwrapped a redirect"
+
+    return f"[{stamp}]  {headline}\n    before  {result.original}\n    after   {result.result}\n\n"
 
 
 @dataclass(frozen=True)
@@ -281,27 +313,34 @@ class NudlApp:
     # -- the audit log -------------------------------------------------------------
 
     def _log(self, result: clean.CleanResult) -> None:
-        """Append `timestamp · original → removed → result` locally. Never leaves the box."""
+        """Append one entry to the local audit log. Never leaves this machine."""
         path = config.log_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+
             if path.exists() and path.stat().st_size > LOG_MAX_BYTES:
                 path.replace(path.with_suffix(".log.1"))
-            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            removed = ",".join(result.params_removed) or "-"
+
+            fresh = not path.exists() or path.stat().st_size == 0
             with open(path, "a", encoding="utf-8") as fh:
-                fh.write(f"{stamp} · {result.original} · {removed} · {result.result}\n")
+                if fresh:
+                    fh.write(LOG_HEADER)
+                fh.write(format_log_entry(result, time.strftime("%Y-%m-%d %H:%M:%S")))
         except OSError:
             logger.exception("could not write the audit log")
 
 
-def acquire_single_instance() -> int | None:
+def acquire_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> int | None:
     """Claim the single-instance mutex. Returns a handle, or None if nudl already runs.
 
     The handle must be held for the life of the process: the mutex exists exactly as
     long as someone holds a handle to it.
+
+    `name` is a parameter so the tests can claim their own mutex. Sharing the real one
+    would make the suite fail whenever nudl is actually running — a test that breaks
+    because the product works is worse than no test.
     """
-    handle = win32event.CreateMutex(None, False, SINGLE_INSTANCE_MUTEX)
+    handle = win32event.CreateMutex(None, False, name)
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
         return None
     return handle
