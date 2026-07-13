@@ -3,6 +3,21 @@
 `OpenClipboard` takes a global, system-wide lock that any other process may be holding
 at the moment we ask. Failing to open is *normal*, not exceptional — so every access
 retries with backoff, and a genuine failure is reported rather than crashing the pump.
+
+It does NOT, however, lock out other threads of the *same* process. A second thread in
+this process can call `OpenClipboard` while the first is mid-session, and it succeeds —
+and then its `CloseClipboard` closes the first thread's session, so the first thread's
+next call dies with ERROR_CLIPBOARD_NOT_OPEN. Measured: three threads, sixty sessions
+each, 147 failures out of 180.
+
+nudl touches the clipboard from three threads — the message pump (cleaning), pystray
+(`can_undo()` reads the clipboard on every menu render), and Tk (the toast's Undo button)
+— so this is not theoretical. Right-clicking the tray while a clean is in flight was
+enough to close the pump's session out from under it, fail the write, and drop the clean
+on the floor with nothing but a log line to show for it. That looks, from the outside,
+exactly like "nudl stopped stripping links".
+
+Hence `_session`: Windows will not serialise nudl's own threads, so nudl does it.
 """
 
 from __future__ import annotations
@@ -22,6 +37,11 @@ logger = logging.getLogger(__name__)
 
 _OPEN_ATTEMPTS = 10
 _OPEN_BACKOFF_SECONDS = 0.02
+
+#: Held for the whole of every clipboard session — open, read/write, close — so that no
+#: two of nudl's threads can ever have one in flight at the same time. Reentrant only as
+#: cheap insurance; nothing nests today.
+_session = threading.RLock()
 
 #: Sent to every listener window whenever the clipboard's contents change.
 #: pywin32 exposes neither this constant nor the listener API, so we go to user32.
@@ -46,22 +66,26 @@ class ClipboardChanged(RuntimeError):
 
 @contextmanager
 def _opened(hwnd: int = 0) -> Iterator[None]:
-    for attempt in range(_OPEN_ATTEMPTS):
-        try:
-            win32clipboard.OpenClipboard(hwnd)
-            break
-        except Exception:  # noqa: BLE001 — pywin32 raises a bare win32 error
-            time.sleep(_OPEN_BACKOFF_SECONDS * (attempt + 1))
-    else:
-        raise ClipboardBusy("clipboard stayed locked by another process")
+    # `_session` first, and held across the whole block: see the module docstring. Another
+    # PROCESS holding the clipboard is what the retry loop is for. Another THREAD of ours
+    # holding it is what this lock is for, and Windows will not tell them apart.
+    with _session:
+        for attempt in range(_OPEN_ATTEMPTS):
+            try:
+                win32clipboard.OpenClipboard(hwnd)
+                break
+            except Exception:  # noqa: BLE001 — pywin32 raises a bare win32 error
+                time.sleep(_OPEN_BACKOFF_SECONDS * (attempt + 1))
+        else:
+            raise ClipboardBusy("clipboard stayed locked by another process")
 
-    try:
-        yield
-    finally:
         try:
-            win32clipboard.CloseClipboard()
-        except Exception:  # noqa: BLE001 — nothing useful to do if close fails
-            logger.debug("CloseClipboard failed", exc_info=True)
+            yield
+        finally:
+            try:
+                win32clipboard.CloseClipboard()
+            except Exception:  # noqa: BLE001 — nothing useful to do if close fails
+                logger.debug("CloseClipboard failed", exc_info=True)
 
 
 def sequence_number() -> int:
@@ -116,7 +140,14 @@ def set_text(text: str, hwnd: int = 0, expect_sequence: int | None = None) -> in
             raise ClipboardChanged("the clipboard changed between the read and the write")
         win32clipboard.EmptyClipboard()
         win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
-        return sequence_number()
+
+    # Read the sequence number AFTER the clipboard is closed, and not a moment before.
+    # Windows goes on bumping the counter through CloseClipboard — a write measured from
+    # inside the open clipboard reports 2257 when the listener will be told 2260. Reading
+    # it early is how the own-write guard ends up armed with a number that can never
+    # match, which is exactly what it was doing: a "dual-signal" guard running on one
+    # signal, with the text comparison quietly carrying auto-watch on its own.
+    return sequence_number()
 
 
 def add_format_listener(hwnd: int) -> bool:

@@ -26,8 +26,11 @@ from __future__ import annotations
 
 import sys
 
-# Anything that imports pywin32, directly or through `src.app`.
+# Anything that imports pywin32, directly or through `src.app`. The integration tests
+# drive the real Win32 clipboard by definition, so all of them are on the list.
 WINDOWS_ONLY = (
+    "integration/test_real_app.py",
+    "integration/test_real_clipboard.py",
     "unit/test_clipboard_filter.py",
     "unit/test_hotkey.py",
     "unit/test_log_format.py",

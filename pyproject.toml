@@ -43,7 +43,10 @@ addopts = "-q"
 # The cleaning engine is pure Python and runs anywhere. The Win32 tests obviously do
 # not, and they must SKIP off-Windows rather than blow up at collection — otherwise a
 # contributor on Linux cannot run the suite that matters at all.
-markers = ["windows: requires Win32 APIs"]
+markers = [
+    "windows: requires Win32 APIs",
+    "integration: drives the REAL Windows clipboard (no fakes); will not run beside a live nudl",
+]
 
 [tool.ruff]
 line-length = 100
