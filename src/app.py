@@ -25,7 +25,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import win32api
 import win32con
+import win32event
+import winerror
 
 from src import clean, clipboard, config, hotkey
 from src.hidden_window import MessageWindow
@@ -35,6 +38,18 @@ from src.tray import Tray
 logger = logging.getLogger(__name__)
 
 HOTKEY_ID = 1
+
+#: Only one nudl may run per user session. A second instance would put a second icon in
+#: the tray, fail to claim the (already-held) hotkey, and — once auto-watch lands —
+#: run a second clipboard watcher that sees the first one's writes and cleans them
+#: again. Two processes taking turns rewriting the clipboard is exactly the silent
+#: mangling this product exists to prevent.
+#:
+#: A named mutex is the right primitive: the kernel creates it atomically, so there is
+#: no window between "check" and "claim" for a second instance to slip through, and it
+#: is released automatically if nudl crashes (unlike a PID file, which would be left
+#: behind and lock the user out).
+SINGLE_INSTANCE_MUTEX = "nudl-single-instance-mutex"
 
 #: Press the hotkey again within this many seconds of a clean to undo it.
 UNDO_WINDOW_SECONDS = 3.0
@@ -231,9 +246,36 @@ class NudlApp:
             logger.exception("could not write the audit log")
 
 
+def acquire_single_instance() -> int | None:
+    """Claim the single-instance mutex. Returns a handle, or None if nudl already runs.
+
+    The handle must be held for the life of the process: the mutex exists exactly as
+    long as someone holds a handle to it.
+    """
+    handle = win32event.CreateMutex(None, False, SINGLE_INSTANCE_MUTEX)
+    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        return None
+    return handle
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    NudlApp().run()
+
+    handle = acquire_single_instance()
+    if handle is None:
+        logger.info("nudl is already running; this instance is exiting")
+        win32api.MessageBox(
+            0,
+            "nudl is already running.\n\nLook for the green n in your system tray.",
+            "nudl",
+            win32con.MB_OK | win32con.MB_ICONINFORMATION,
+        )
+        return
+
+    try:
+        NudlApp().run()
+    finally:
+        win32api.CloseHandle(handle)
 
 
 if __name__ == "__main__":
