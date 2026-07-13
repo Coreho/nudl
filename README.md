@@ -123,19 +123,17 @@ It's a small unsigned tool that reads your clipboard, so it's fair to be suspici
 
 ### The VirusTotal score, stated plainly
 
-**[3 of ~70 engines flag `nudl.exe`](https://www.virustotal.com/gui/file/27a5c30a9c6a6b220bcb2f25bfc8f867ce5b108f9f8b8c882f7db83cfecc61ea)** — including ArcticWolf and SecureAge.
+**[1 of ~70 engines flags the download](https://www.virustotal.com/gui/file/96d640071927403ae992e2647d106238621f23e526b5b554df1006028b3c4261)** — `nudl-0.1.0-win64.zip`, SHA-256 `96d64007…4261`. That is the exact file on the releases page; verify it yourself with `Get-FileHash`.
 
 I'd rather you hear that from me than find it yourself.
 
-Those are machine-learning heuristic scanners, and what they're reacting to is **PyInstaller**, not nudl. Bundling a Python interpreter inside a self-extracting executable looks structurally like a packer, and packers are what malware uses to hide — so a handful of aggressive engines flag *every* tool built this way. It's a known false-positive pattern, not a finding about this code.
+That one detection is a machine-learning heuristic, and what it reacts to is **PyInstaller**, not nudl. Bundling a Python interpreter into a self-extracting executable looks structurally like a packer, and packers are what malware uses to hide — so aggressive engines flag *tools built this way* regardless of what they do. It's a known false-positive pattern, not a finding about this code.
 
-What matters more:
+- **Microsoft Defender scans it clean**, with current signatures and real-time protection on. Defender is what actually decides whether nudl runs on your machine.
+- **Every major engine reads clean.**
+- For completeness: the [bootloader `nudl.exe` scanned on its own](https://www.virustotal.com/gui/file/27a5c30a9c6a6b220bcb2f25bfc8f867ce5b108f9f8b8c882f7db83cfecc61ea) draws 3 flags (ArcticWolf, SecureAge). That file is a stub — it contains none of nudl's logic and cannot even run without the `_internal` folder beside it. The zip above is the honest scan, and it's the one you download.
 
-- **Microsoft Defender scans it clean**, with current signatures and real-time protection on. Defender is what actually decides whether nudl can run on your machine.
-- **Every major engine reads clean** — the three that don't are heuristic outliers.
-- The scanned binary is **byte-identical to the one in the release zip** (SHA-256 `27a5c30a…61ea`). Don't trust me on that either — unzip it and run `Get-FileHash nudl.exe`.
-
-If that's not good enough for you, that's a completely reasonable place to land: run it from source instead (see below), where there's no packed binary at all and you can read every line.
+Not satisfied? That's a completely reasonable place to land. Run it from source instead — no packed binary at all, and every line is readable.
 
 ## Development
 
