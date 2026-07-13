@@ -1,0 +1,96 @@
+{
+  "$comment": [
+    "nudl v0 bundled rule set — hand-rolled, ~25 rules. See contracts/rules-schema.md.",
+    "Adopts the ClearURLs SCHEMA SHAPE so a future migration stays open, but bundles NONE",
+    "of ClearURLs' rules data (its license is unverified).",
+    "",
+    "Key-pattern syntax (matched case-insensitively against the query KEY, never the value):",
+    "  'fbclid'    exact key match",
+    "  '^utm_.*$'  anchored regex (leading '^')",
+    "  'pd_rd_*'   prefix glob (trailing '*')",
+    "",
+    "DELIBERATELY ABSENT:",
+    "  si       — Spotify/YouTube share id. Removing it has broken shared-playlist and",
+    "             'who invited you' flows. v0 keeps it everywhere (SPEC-CLAUDE.md §5.3).",
+    "  keywords — SPEC-CLAUDE.md §6 lists it under Amazon, but amazon.com/s?keywords=...",
+    "             IS the search query; stripping it yields a blank search page. That",
+    "             violates Constitution I (never break a needed link), which outranks the",
+    "             rule list. Add it back only with a path scope."
+  ],
+
+  "global_tracker_keys": [
+    "^utm_.*$",
+    "fbclid",
+    "gclid",
+    "dclid",
+    "gbraid",
+    "wbraid",
+    "msclkid",
+    "mc_eid",
+    "mc_cid",
+    "igshid",
+    "vero_id",
+    "vero_conv",
+    "_hsenc",
+    "_hsmi",
+    "oly_enc_id",
+    "oly_anon_id",
+    "^ss_.*$",
+    "icid",
+    "mkt_tok"
+  ],
+
+  "redirect_wrappers": [
+    { "host": "l.facebook.com", "path": "/l.php", "param": "u" },
+    { "host": "lm.facebook.com", "path": "/l.php", "param": "u" },
+    { "host": "l.messenger.com", "path": "/l.php", "param": "u" },
+    { "host": "l.instagram.com", "path": "/", "param": "u" },
+    { "host": "google.com", "path": "/url", "param": "q" },
+    { "host": "google.com", "path": "/url", "param": "url" },
+    { "host": "out.reddit.com", "path": "/", "param": "url" },
+    { "host": "steamcommunity.com", "path": "/linkfilter", "param": "url" },
+    { "host": "t.umblr.com", "path": "/redirect", "param": "z" }
+  ],
+
+  "referral": ["ref", "refid", "referrer", "referral"],
+
+  "providers": [
+    {
+      "name": "amazon",
+      "urlPattern": "(^|\\.)amazon\\.",
+      "exceptions": [],
+      "rules": [
+        "tag",
+        "ref_",
+        "ref",
+        "pd_rd_*",
+        "pf_rd_*",
+        "qid",
+        "sr",
+        "_encoding",
+        "smid",
+        "linkCode",
+        "creative",
+        "creativeASIN"
+      ],
+      "rawRules": [],
+      "referral": ["tag"]
+    },
+    {
+      "name": "youtube",
+      "urlPattern": "(^|\\.)youtube\\.com$|(^|\\.)youtu\\.be$",
+      "exceptions": [],
+      "rules": ["feature", "kw", "pp"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "twitter",
+      "urlPattern": "(^|\\.)(twitter|x)\\.com$",
+      "exceptions": [],
+      "rules": ["s", "t", "ref_src", "ref_url"],
+      "rawRules": [],
+      "referral": []
+    }
+  ]
+}

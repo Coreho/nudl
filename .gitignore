@@ -13,12 +13,19 @@ venv/
 # Local app data (nudl writes config/logs here at runtime)
 AppData/
 
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
 *.log
 
-# Local-only runtime artifacts
+# Local-only runtime artifacts (the user's copies under %AppData%\nudl\)
 clean.log
 config.json
 rules.json
+
+# ...but the bundled default rule set ships with the source.
+!src/rules.json
