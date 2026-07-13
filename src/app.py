@@ -151,6 +151,8 @@ class NudlApp:
         tray = Tray(
             get_mode=lambda: self.config["mode"],
             set_mode=self._set_mode,
+            undo=self.undo,
+            can_undo=self.can_undo,
             open_settings=self._open_settings,
             open_log=self._open_log,
             show_about=self._show_about,
@@ -212,6 +214,7 @@ class NudlApp:
     def on_clipboard_update(self) -> None:
         """Something changed the clipboard. Was it us? Was it a link? Should we act?"""
         if self.config["mode"] != "auto":
+            logger.debug("clipboard changed, but mode is %r", self.config["mode"])
             return
 
         try:
@@ -220,23 +223,29 @@ class NudlApp:
             # pair a stale sequence number with fresh text.
             text, sequence = clipboard.get_text_and_sequence()
         except clipboard.ClipboardBusy:
-            return  # someone else holds the lock; leave their clipboard alone
+            logger.warning("clipboard update: locked by another process, skipping")
+            return
 
         # The echo of our own write. Ignoring this is what stops the infinite loop.
         if self._own_write.is_own_write(sequence, text):
+            logger.debug("clipboard update seq=%s was our own write; ignoring", sequence)
             return
 
         url = clipboard.as_single_url(text)
         if url is None:
+            logger.debug("clipboard update: not a single URL; leaving it alone")
             return  # a paragraph, a file, an image, plain text — never touched
 
+        logger.info("auto-watch: cleaning a copied link")
         self.apply_clean(url)
 
     # -- the hotkey ----------------------------------------------------------------
 
     def on_hotkey(self) -> None:
         """Clean what's on the clipboard — or undo the last clean."""
+        logger.info("hotkey pressed")
         if self._undo_if_pending():
+            logger.info("hotkey: within the undo window -> undid the last clean")
             return
 
         try:
@@ -244,11 +253,13 @@ class NudlApp:
         except clipboard.ClipboardBusy:
             # The user pressed the hotkey and something has to happen. Silence here reads
             # as "nudl is broken".
+            logger.warning("hotkey: clipboard is locked by another process")
             self.ui.show_toast("nudl — clipboard busy, try again", seconds=3)
             return
 
         url = clipboard.as_single_url(text)
         if url is None:
+            logger.info("hotkey: clipboard holds no single URL")
             self.ui.show_toast("nudl — no link on the clipboard", seconds=3)
             return
 
@@ -263,7 +274,11 @@ class NudlApp:
             strip_referral=self.config["strip_referral"],
         )
         if not result.changed:
-            return  # a no-op is silent: no toast, no clipboard write (FR-008)
+            # A no-op is silent: no toast, no clipboard write. But it is NOT invisible to
+            # the debug log — "nudl stopped working" and "nudl decided there was nothing
+            # to do" look identical from the outside, and this is how you tell them apart.
+            logger.info("no change (%s)", result.reason_noop or "nothing to strip")
+            return
 
         if not self._write_clipboard(result.result):
             self.ui.show_toast("nudl — clipboard busy, link left alone", seconds=3)
@@ -308,35 +323,79 @@ class NudlApp:
     # -- undo ----------------------------------------------------------------------
 
     def _undo_if_pending(self) -> bool:
-        """Hotkey pressed again within the undo window → undo instead of cleaning."""
+        """Hotkey pressed again within the undo window → undo instead of cleaning.
+
+        The time limit belongs to the HOTKEY, not to undo itself. Pressing the shortcut
+        again is ambiguous — you might mean "undo", you might mean "clean this new
+        thing" — so it only means undo in the moments right after a clean. The tray's
+        Undo entry is unambiguous, so it carries no clock.
+        """
         with self._lock:
             last = self._last_clean
         if last is None or time.monotonic() - last.at > UNDO_WINDOW_SECONDS:
             return False
-        # Only undo if the clipboard still holds what nudl put there. If the user has
-        # copied something else since, the undo would clobber it.
-        if clipboard.get_text() != last.cleaned:
+        return self.undo()
+
+    def can_undo(self) -> bool:
+        """Is there a clean to undo, and is undoing it still safe?
+
+        Drives the tray entry's enabled state, so the menu tells the truth instead of
+        offering an action that would do nothing (or worse).
+        """
+        with self._lock:
+            last = self._last_clean
+        if last is None:
             return False
-        self.undo()
-        return True
+        try:
+            return clipboard.get_text() == last.cleaned
+        except clipboard.ClipboardBusy:
+            return False
 
-    def undo(self) -> None:
-        """Restore the exact original clipboard content (FR-009).
+    def undo(self) -> bool:
+        """Restore the exact original clipboard content. Returns whether it happened.
 
-        In auto mode this is the subtlest write in the program: restoring the ugly
+        Undo will only fire if the clipboard STILL holds what nudl put there. If you have
+        copied something else since, restoring the old link would silently destroy what
+        you just copied — an undo that eats your clipboard is a far worse bug than the
+        one it was undoing. Every entry point (hotkey, toast button, tray) goes through
+        this check.
+
+        In auto mode this is also the subtlest write in the program: restoring the ugly
         original puts a dirty link back on the clipboard, which the auto-watcher is
         listening for. Without the own-write guard it would immediately re-clean it and
         undo would be impossible. Hence `_write_clipboard`, never a raw `set_text`.
         """
         with self._lock:
             last = self._last_clean
-            self._last_clean = None
+
         if last is None:
-            return
+            return False
+
+        try:
+            current = clipboard.get_text()
+        except clipboard.ClipboardBusy:
+            self.ui.show_toast("nudl — clipboard busy, could not undo", seconds=3)
+            return False
+
+        if current != last.cleaned:
+            # Someone (probably the user) has copied something else. Refuse, and stop
+            # offering: the moment has passed.
+            logger.info("undo declined: the clipboard no longer holds nudl's cleaned link")
+            with self._lock:
+                self._last_clean = None
+            self.ui.show_toast("nudl — nothing to undo; the clipboard changed", seconds=3)
+            return False
+
+        with self._lock:
+            self._last_clean = None
+
         if not self._write_clipboard(last.original):
             self.ui.show_toast("nudl — clipboard busy, could not undo", seconds=3)
-            return
+            return False
+
+        logger.info("undo: restored the original link")
         self.ui.show_toast("nudl — undone", seconds=2)
+        return True
 
     # -- tray actions --------------------------------------------------------------
 
@@ -410,8 +469,32 @@ def acquire_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> int | None:
     return handle
 
 
+def _setup_logging() -> None:
+    """Send nudl's own errors to a file.
+
+    nudl runs windowed (pythonw), so there is no console and stderr goes nowhere. Any
+    exception — a dead pump, a failed clipboard write — vanished silently, and the tool
+    just quietly stopped working with no trace anywhere. Diagnosing that from the outside
+    is guesswork, which is exactly what it was.
+    """
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    try:
+        path = config.config_dir() / "nudl-debug.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > LOG_MAX_BYTES:
+            path.replace(path.with_suffix(".log.1"))
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
+    except OSError:
+        pass  # a tool that cannot write its debug log must still run
+
+
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    _setup_logging()
+    logging.getLogger(__name__).info("nudl starting")
 
     handle = acquire_single_instance()
     if handle is None:

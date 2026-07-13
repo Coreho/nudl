@@ -50,6 +50,8 @@ class Tray:
         self,
         get_mode: Callable[[], str],
         set_mode: Callable[[str], None],
+        undo: Callable[[], bool],
+        can_undo: Callable[[], bool],
         open_settings: Callable[[], None],
         open_log: Callable[[], None],
         show_about: Callable[[], None],
@@ -64,6 +66,18 @@ class Tray:
             icon=_icon_image(),
             title="nudl — clean links",
             menu=pystray.Menu(
+                # The toast lasts seconds and the hotkey window is shorter still. Miss
+                # both and the original was gone — even though nudl still had it. Here it
+                # stays available for as long as undoing is actually safe, and greys out
+                # the moment it isn't, so the menu never offers an action that would do
+                # nothing.
+                pystray.MenuItem(
+                    "Undo last clean",
+                    lambda: undo(),
+                    enabled=lambda _: can_undo(),
+                    default=True,
+                ),
+                pystray.Menu.SEPARATOR,
                 pystray.MenuItem(
                     "Mode",
                     pystray.Menu(

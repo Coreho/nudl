@@ -10,6 +10,28 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $python = Join-Path $root ".venv\Scripts\python.exe"
 
+# Anything holding a DLL inside dist\ makes PyInstaller fail with a bare "Access is
+# denied", which is a miserable thing to debug. The usual culprit is not nudl itself:
+# VS Code's Python extension ships pet.exe ("Python Environment Tools"), which crawls
+# the disk looking for Python environments, finds dist\nudl\_internal (it has a
+# python*.dll in it, so it looks exactly like one), loads VCRUNTIME140.dll out of it,
+# and locks the file. Name the offender rather than let it look like a mystery.
+$dist = Join-Path $root "dist"
+if (Test-Path $dist) {
+    $lockers = @()
+    Get-Process | ForEach-Object {
+        $proc = $_
+        try {
+            if ($proc.Modules | Where-Object { $_.FileName -like "$dist*" }) {
+                $lockers += "$($proc.ProcessName) (pid $($proc.Id))"
+            }
+        } catch { }
+    }
+    if ($lockers) {
+        throw "dist\ is locked by: $($lockers -join ', ').  Stop them and re-run. (pet.exe is VS Code's Python extension; killing it is harmless — it restarts.)"
+    }
+}
+
 # One source of truth for the version. Hardcoding it here as well as in pyproject.toml
 # and the Scoop manifest is how you ship a v0.1.1 zip named v0.1.0.
 $version = (Select-String -Path (Join-Path $root "pyproject.toml") -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
@@ -41,8 +63,23 @@ Write-Host "Freezing with PyInstaller (--onedir)..." -ForegroundColor Cyan
     --specpath (Join-Path $root "build") `
     (Join-Path $root "run_nudl.py")
 
+# PyInstaller is a native command, so a failure does NOT trip $ErrorActionPreference.
+# Without this check the script sails on and zips up whatever half-built wreckage is
+# lying in dist/ — which is exactly how you ship a 3.9 MB archive that cannot start.
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE). Is nudl.exe still running?" }
+
 $exe = Join-Path $root "dist\nudl\nudl.exe"
 if (-not (Test-Path $exe)) { throw "build failed: no exe at $exe" }
+
+# nudl.exe on its own is only a bootloader stub — it exists even when the build is
+# broken. The real payload is _internal\, so validate THAT.
+$internal = Join-Path $root "dist\nudl\_internal"
+$python = Get-ChildItem $internal -Filter "python*.dll" -ErrorAction SilentlyContinue
+if (-not $python) { throw "build is incomplete: no python*.dll in _internal\" }
+
+$distMb = (Get-ChildItem (Join-Path $root "dist\nudl") -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+if ($distMb -lt 15) { throw ("build is incomplete: dist is only {0:N1} MB (expected 20+)" -f $distMb) }
+Write-Host ("  payload: {0:N1} MB, python DLL present" -f $distMb) -ForegroundColor Green
 
 $zip = Join-Path $root "dist\nudl-$version-win64.zip"
 if (Test-Path $zip) { Remove-Item $zip }
