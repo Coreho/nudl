@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+import pywintypes
 import win32api
 import win32con
 import win32event
@@ -73,22 +74,70 @@ LOG_HEADER = """\
 """
 
 
-def redact(url: str) -> str:
-    """Strip credentials out of a URL before it is written to disk.
+# Params whose VALUE is a secret. This is a LOGGING concern and nothing else: nudl never
+# strips these from your link — doing that is how you turn a password-reset link into a
+# 403 — but the audit log is an append-only plaintext file that lives forever, and
+# writing an OAuth code or a session key into it verbatim would quietly turn nudl's trust
+# feature into a credential store. The key is kept, only the value is masked, so the log
+# still tells you what the link was carrying.
+SECRET_LOG_KEYS = frozenset(
+    {
+        "code",
+        "access_token",
+        "id_token",
+        "refresh_token",
+        "auth",
+        "authorization",
+        "session",
+        "sessionid",
+        "sid",
+        "key",
+        "api_key",
+        "apikey",
+        "secret",
+        "password",
+        "passwd",
+        "pwd",
+        "otp",
+        "pin",
+    }
+    | set(clean.SIGNED_EXACT_KEYS)
+)
+_MASK = "***"
 
-    `https://user:hunter2@host/x` is a perfectly legal URL, and the audit log is an
-    append-only plaintext file that lives forever. Logging the password would turn a
-    trust feature into a credential leak. The rest of the URL is left exactly as it is —
-    the log has to stay useful.
+
+def _redact_query(query: str) -> str:
+    parts = []
+    for pair in query.split("&"):
+        key, sep, _value = pair.partition("=")
+        parts.append(f"{key}={_MASK}" if sep and key.lower() in SECRET_LOG_KEYS else pair)
+    return "&".join(parts)
+
+
+def redact(url: str) -> str:
+    """Mask credentials and secret-bearing params before a URL is written to disk.
+
+    Two things get masked: the `user:hunter2@host` userinfo, which is a perfectly legal
+    part of a URL, and the values of any param in SECRET_LOG_KEYS. Everything else is
+    left exactly as it is — the log has to stay useful, or nobody will trust it.
     """
     try:
         parts = urlsplit(url)
     except ValueError:
         return url
-    if not parts.netloc or "@" not in parts.netloc:
+
+    netloc = parts.netloc
+    if netloc and "@" in netloc:
+        _credentials, _, host = netloc.rpartition("@")
+        netloc = f"***@{host}"
+
+    query = _redact_query(parts.query) if parts.query else parts.query
+
+    # Only rebuild if something actually changed: urlunsplit does not always round-trip
+    # exotic inputs byte-for-byte, and the log should show the link the user really had.
+    if netloc == parts.netloc and query == parts.query:
         return url
-    _credentials, _, host = parts.netloc.rpartition("@")
-    return urlunsplit((parts.scheme, f"***@{host}", parts.path, parts.query, parts.fragment))
+    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
 
 
 def format_log_entry(result: clean.CleanResult, stamp: str) -> str:
@@ -103,8 +152,14 @@ def format_log_entry(result: clean.CleanResult, stamp: str) -> str:
         headline = f"removed 1 tracker: {result.params_removed[0]}"
     elif count > 1:
         headline = f"removed {count} trackers: {', '.join(result.params_removed)}"
-    else:
+    elif urlsplit(result.original).netloc != urlsplit(result.result).netloc:
+        # The host moved, so this was a redirect wrapper being unwrapped.
         headline = "unwrapped a redirect"
+    else:
+        # Changed, same host, no params named: a rawRule rewrote the link in place.
+        # Calling that "unwrapped a redirect" is a lie in an audit log, which is the one
+        # place a lie is least affordable.
+        headline = "rewrote the link"
 
     before, after = redact(result.original), redact(result.result)
     return f"[{stamp}]  {headline}\n    before  {before}\n    after   {after}\n\n"
@@ -188,7 +243,14 @@ class NudlApp:
 
             # The listener is registered once and left in place for the life of the
             # process; the handler simply does nothing when the mode is "hotkey".
-            clipboard.add_format_listener(self.window.hwnd)
+            if not clipboard.add_format_listener(self.window.hwnd):
+                # Auto-watch is now dead and nothing else will say so: the tray icon sits
+                # there looking healthy while every copy goes uncleaned. Say it out loud.
+                logger.error("could not register the clipboard listener; auto mode is dead")
+                if self.config["mode"] == "auto":
+                    self.ui.show_toast(
+                        "nudl — could not watch the clipboard. Use hotkey mode.", seconds=10
+                    )
 
             self.window.pump()  # blocks until stop()
         except Exception:  # noqa: BLE001
@@ -290,7 +352,7 @@ class NudlApp:
         self._log(result)
         self.ui.show_toast(self._describe(result), on_undo=self.undo)
 
-    def _write_clipboard(self, text: str) -> bool:
+    def _write_clipboard(self, text: str, expect_sequence: int | None = None) -> bool:
         """The ONLY way nudl writes the clipboard. Always through the own-write guard.
 
         Arm before the write, confirm after: a clipboard write nudl doesn't recognise as
@@ -300,12 +362,16 @@ class NudlApp:
         text that never reached the clipboard — and the next time the user copies that
         same link by hand, nudl would mistake it for its own echo and refuse to clean it.
         A failed write must not poison the next one.
+
+        `expect_sequence` refuses the write if the clipboard moved since the caller read
+        it. Undo passes it; cleaning does not, because cleaning acts on the copy that
+        just happened rather than on something the user might have replaced.
         """
         with self._write_lock:
             self._own_write.arm(text)
             try:
-                self._own_write.confirm(clipboard.set_text(text))
-            except Exception:  # noqa: BLE001 — busy clipboard, or any win32 failure
+                self._own_write.confirm(clipboard.set_text(text, expect_sequence=expect_sequence))
+            except Exception:  # noqa: BLE001 — busy clipboard, changed clipboard, any win32 failure
                 logger.warning("could not write the clipboard", exc_info=True)
                 self._own_write.disarm()
                 return False
@@ -372,7 +438,7 @@ class NudlApp:
             return False
 
         try:
-            current = clipboard.get_text()
+            current, sequence = clipboard.get_text_and_sequence()
         except clipboard.ClipboardBusy:
             self.ui.show_toast("nudl — clipboard busy, could not undo", seconds=3)
             return False
@@ -386,11 +452,25 @@ class NudlApp:
             self.ui.show_toast("nudl — nothing to undo; the clipboard changed", seconds=3)
             return False
 
+        # Claim the undo, so two entry points firing at once cannot both restore it.
         with self._lock:
+            if self._last_clean is not last:
+                return False
             self._last_clean = None
 
-        if not self._write_clipboard(last.original):
-            self.ui.show_toast("nudl — clipboard busy, could not undo", seconds=3)
+        # `sequence` closes the gap between the check above and the write below: if the
+        # user copies something in that window, the write is refused rather than
+        # destroying what they just copied.
+        if not self._write_clipboard(last.original, expect_sequence=sequence):
+            # Put the undo back. A busy clipboard is transient, and discarding the
+            # original here would mean telling the user "could not undo" and then never
+            # letting them try again — losing the very thing undo exists to protect. If
+            # instead the clipboard genuinely moved on, `can_undo()` sees that on the next
+            # menu render and greys the entry out, so restoring it cannot mislead anyone.
+            with self._lock:
+                if self._last_clean is None:
+                    self._last_clean = last
+            self.ui.show_toast("nudl — could not undo; the clipboard was busy", seconds=3)
             return False
 
         logger.info("undo: restored the original link")
@@ -459,7 +539,17 @@ def acquire_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> int | None:
     would make the suite fail whenever nudl is actually running — a test that breaks
     because the product works is worse than no test.
     """
-    handle = win32event.CreateMutex(None, False, name)
+    try:
+        handle = win32event.CreateMutex(None, False, name)
+    except pywintypes.error:
+        # Under pythonw there is no console, so an uncaught exception here would kill
+        # nudl before the tray ever appears, with nothing on screen and nothing in a log
+        # to say why. If we cannot claim the mutex we cannot prove we are alone — so let
+        # this instance run rather than vanish. The worst case is two nudls; the worst
+        # case of the alternative is a program that silently refuses to start.
+        logger.exception("could not create the single-instance mutex; starting anyway")
+        return 0
+
     if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
         # CreateMutex hands back a valid handle to the EXISTING mutex even when it
         # already exists. Dropping it on the floor leaks a kernel handle every call.

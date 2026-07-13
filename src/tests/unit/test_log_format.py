@@ -30,6 +30,50 @@ def test_credentials_are_redacted_before_they_hit_disk() -> None:
     assert "id=1" in entry  # the log still has to be useful
 
 
+def test_secret_bearing_params_never_reach_the_log() -> None:
+    """A one-time OAuth code is not a tracker, so nudl leaves it in your link — correctly.
+
+    But the audit log is an append-only plaintext file that lives forever, and writing the
+    code into it verbatim would quietly turn nudl's trust feature into a credential store.
+    The param NAME survives so the log still shows what the link was carrying; the value
+    does not.
+    """
+    entry = format_log_entry(
+        CleanResult(
+            original="https://app.example.com/callback?code=SECRET-OAUTH-CODE&utm_source=n",
+            result="https://app.example.com/callback?code=SECRET-OAUTH-CODE",
+            params_removed=["utm_source"],
+        ),
+        STAMP,
+    )
+    assert "SECRET-OAUTH-CODE" not in entry
+    assert "code=***" in entry
+    assert "removed 1 tracker: utm_source" in entry
+
+
+def test_redaction_leaves_an_ordinary_link_byte_for_byte() -> None:
+    """Over-redacting is its own failure: a log nobody can read is a log nobody trusts."""
+    url = "https://www.amazon.com/dp/B08X7QK2P?psc=1&th=1"
+    assert redact(url) == url
+
+
+def test_a_rawrule_rewrite_is_not_called_a_redirect() -> None:
+    """Same host, nothing named: that is a rawRule, not an unwrap. Say so.
+
+    An audit log is the one place a convenient lie is least affordable — it is the file
+    the suspicious user opens precisely because they do not take nudl's word for it.
+    """
+    entry = format_log_entry(
+        CleanResult(
+            original="https://example.com/watch#t=30&utm_source=x",
+            result="https://example.com/watch#t=30",
+        ),
+        STAMP,
+    )
+    assert "rewrote the link" in entry
+    assert "unwrapped a redirect" not in entry
+
+
 def test_redact_leaves_ordinary_urls_alone() -> None:
     url = "https://example.com/a?id=1"
     assert redact(url) == url

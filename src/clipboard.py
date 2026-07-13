@@ -40,6 +40,10 @@ class ClipboardBusy(RuntimeError):
     """Another process held the clipboard lock for longer than we were willing to wait."""
 
 
+class ClipboardChanged(RuntimeError):
+    """The clipboard moved on between the read and the write. Nothing was written."""
+
+
 @contextmanager
 def _opened(hwnd: int = 0) -> Iterator[None]:
     for attempt in range(_OPEN_ATTEMPTS):
@@ -93,9 +97,23 @@ def get_text_and_sequence() -> tuple[str | None, int]:
             return None, seq
 
 
-def set_text(text: str, hwnd: int = 0) -> int:
-    """Replace the clipboard with `text`. Returns the resulting sequence number."""
+def set_text(text: str, hwnd: int = 0, expect_sequence: int | None = None) -> int:
+    """Replace the clipboard with `text`. Returns the resulting sequence number.
+
+    `expect_sequence` makes this a compare-and-swap, and undo depends on it. Undo reads
+    the clipboard, decides the cleaned link is still there, and only then writes the
+    original back — and in the gap between those two steps the user can copy something
+    they care about, which a blind write would destroy. That is the one failure nudl is
+    not allowed to have.
+
+    The check has to happen *inside* `_opened`, and that is the whole trick: while we
+    hold the clipboard open, Windows lets no other process open it, so nothing can slip
+    in between the comparison and the write. Checking the sequence number before calling
+    this would just be the same race with extra steps.
+    """
     with _opened(hwnd):
+        if expect_sequence is not None and sequence_number() != expect_sequence:
+            raise ClipboardChanged("the clipboard changed between the read and the write")
         win32clipboard.EmptyClipboard()
         win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
         return sequence_number()

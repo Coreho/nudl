@@ -22,6 +22,7 @@ class FakeClipboard:
     """Stands in for the Win32 clipboard."""
 
     ClipboardBusy = app_module.clipboard.ClipboardBusy
+    ClipboardChanged = app_module.clipboard.ClipboardChanged
     # Mirror the real constant (0x031D). A double that quietly disagrees with the thing it
     # doubles is a trap primed for whoever first drives `_pump()` through this fake.
     WM_CLIPBOARDUPDATE = app_module.clipboard.WM_CLIPBOARDUPDATE
@@ -30,21 +31,29 @@ class FakeClipboard:
         self.text = text
         self.sequence = 1
         self.busy = False
+        self.busy_on_write = False  # a clipboard that reads fine but will not be written
 
     def get_text(self) -> str | None:
         if self.busy:
             raise self.ClipboardBusy("locked")
         return self.text
 
-    def set_text(self, text: str) -> int:
-        if self.busy:
+    def set_text(self, text: str, expect_sequence: int | None = None) -> int:
+        if self.busy or self.busy_on_write:
             raise self.ClipboardBusy("locked")
+        if expect_sequence is not None and expect_sequence != self.sequence:
+            raise self.ClipboardChanged("the clipboard changed under us")
         self.text = text
         self.sequence += 1
         return self.sequence
 
     def get_text_and_sequence(self) -> tuple[str | None, int]:
         return self.get_text(), self.sequence
+
+    def copy_as_the_user(self, text: str) -> None:
+        """What happens when a human presses Ctrl+C: new text, and the sequence moves."""
+        self.text = text
+        self.sequence += 1
 
     OwnWriteGuard = app_module.clipboard.OwnWriteGuard
     as_single_url = staticmethod(app_module.clipboard.as_single_url)
@@ -115,6 +124,53 @@ def test_a_busy_clipboard_does_not_lose_the_original(nudl) -> None:
     fake.busy = False
     assert instance.undo() is True, "a transient busy clipboard threw the undo away"
     assert fake.text == UGLY
+
+
+def test_a_busy_WRITE_does_not_lose_the_original(nudl) -> None:
+    """The read succeeds, the write fails. The undo must survive to be retried.
+
+    This is the half the busy-clipboard test above never reached, and it was broken:
+    `_last_clean` was cleared *before* the write, so a write that failed left the user
+    told "could not undo" and permanently unable to try again — the original gone for
+    good. Losing the thing undo exists to protect, in the failure branch of undo itself.
+    """
+    instance, fake = nudl
+    _pretend_we_cleaned(instance, fake)
+    fake.busy_on_write = True
+
+    assert instance.undo() is False
+    assert fake.text == CLEAN, "a failed write must not have changed anything"
+    assert instance.can_undo() is True, "the undo was thrown away on a failed write"
+
+    fake.busy_on_write = False
+    assert instance.undo() is True
+    assert fake.text == UGLY
+
+
+def test_undo_does_not_clobber_something_copied_mid_undo(nudl, monkeypatch) -> None:
+    """The TOCTOU: undo checks the clipboard, then writes. What lands in the gap?
+
+    Undo reads the clipboard, sees its own cleaned link, and commits to restoring the
+    original. If the user copies something in the microseconds before the write lands, a
+    blind write destroys it. nudl passes the sequence number it read down into the write
+    and Windows refuses the swap if the clipboard moved — so the user's copy survives,
+    which is the one thing nudl may never get wrong.
+    """
+    instance, fake = nudl
+    _pretend_we_cleaned(instance, fake)
+
+    precious = "the thing the user copied and would like to keep"
+    real_get = fake.get_text_and_sequence
+
+    def copy_something_right_after_the_check() -> tuple[str | None, int]:
+        got = real_get()
+        fake.copy_as_the_user(precious)  # the race, made deterministic
+        return got
+
+    monkeypatch.setattr(fake, "get_text_and_sequence", copy_something_right_after_the_check)
+
+    assert instance.undo() is False
+    assert fake.text == precious, "undo overwrote what the user copied mid-undo"
 
 
 # -- the tray entry's enabled state ------------------------------------------------

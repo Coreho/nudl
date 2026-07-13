@@ -338,6 +338,11 @@ def clean_result(
     try:
         return _clean_result(url, rules or _bundled_rules(), exceptions or [], strip_referral)
     except Exception:  # noqa: BLE001 — the fail-safe. No input may ever raise.
+        # Returning the URL untouched is the right BEHAVIOUR — a link nudl cannot reason
+        # about must come back exactly as it went in. But swallowing the traceback too
+        # means a genuine engine bug is indistinguishable from "nothing to clean here",
+        # and nudl would go on quietly cleaning nothing while looking perfectly healthy.
+        logger.exception("clean() failed; returning the URL untouched")
         return CleanResult(original=url, result=url, reason_noop="error")
 
 
