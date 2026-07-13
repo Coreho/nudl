@@ -180,6 +180,7 @@ class NudlApp:
         self.rules = clean.load_rules(config.config_dir() / self.config["rules_path"])
         self.ui = OverlayUI()
         self.window: MessageWindow | None = None
+        self._window_released = False
 
         self._lock = threading.Lock()
         self._last_clean: LastClean | None = None
@@ -233,6 +234,13 @@ class NudlApp:
             self.window.on(win32con.WM_HOTKEY, lambda _w, _l: self.on_hotkey())
             self.window.on(clipboard.WM_CLIPBOARDUPDATE, lambda _w, _l: self.on_clipboard_update())
 
+            # Cleanup runs HERE, on WM_CLOSE, and not in a finally after the pump returns.
+            # `stop()` posts WM_CLOSE; DefWindowProc answers it by destroying the window;
+            # only then does PumpMessages() return. So by the time any finally-block runs,
+            # the hwnd is already dead and unregistering against it is unregistering
+            # against nothing. WM_CLOSE is the last moment the window still exists.
+            self.window.on(win32con.WM_CLOSE, lambda _w, _l: self._release_window())
+
             try:
                 hotkey.register(self.window.hwnd, HOTKEY_ID, self.config["hotkey"])
             except (hotkey.InvalidHotkey, hotkey.HotkeyUnavailable) as exc:
@@ -260,13 +268,28 @@ class NudlApp:
             logger.exception("the message pump died")
             self.ui.show_toast("nudl — stopped responding. Restart it.", seconds=10)
         finally:
-            if self.window is not None:
-                hotkey.unregister(self.window.hwnd, HOTKEY_ID)
-                clipboard.remove_format_listener(self.window.hwnd)
+            # A fallback, not the main path: if the pump died before it ever saw WM_CLOSE,
+            # the window may still be alive and still holding the chord. `_release_window`
+            # checks the hwnd, so when the normal shutdown already ran this does nothing.
+            self._release_window()
+
+    def _release_window(self) -> None:
+        """Give the hotkey and the clipboard listener back. Pump thread only; idempotent.
+
+        `UnregisterHotKey` only frees a hotkey registered by the *calling* thread, which is
+        why this cannot move to the tray thread: it would fail silently and leak the chord
+        to every other application on the system until reboot.
+        """
+        window = self.window
+        if window is None or not window.hwnd or self._window_released:
+            return
+        self._window_released = True
+        hotkey.unregister(window.hwnd, HOTKEY_ID)
+        clipboard.remove_format_listener(window.hwnd)
 
     def _shutdown(self) -> None:
-        # Only ASK the pump to stop; it unregisters its own hotkey and listener on the
-        # thread that owns them (see _pump's finally).
+        # Only ASK the pump to stop. It gives back its own hotkey and listener on the
+        # thread that owns them (see the WM_CLOSE handler in _pump).
         if self.window is not None:
             self.window.stop()
         self.ui.stop()
