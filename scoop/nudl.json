@@ -1,12 +1,12 @@
 {
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Strips tracking junk off any link you copy — system-wide, not just in the browser. Same real URL, trimmed.",
     "homepage": "https://github.com/Coreho/nudl",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/Coreho/nudl/releases/download/v0.1.0/nudl-0.1.0-win64.zip",
-            "hash": "96d640071927403ae992e2647d106238621f23e526b5b554df1006028b3c4261"
+            "url": "https://github.com/Coreho/nudl/releases/download/v0.1.1/nudl-0.1.1-win64.zip",
+            "hash": "2549b01232b7df23c986a410db87dc05b099f9042182fd245ef0b978508a3e1b"
         }
     },
     "shortcuts": [
