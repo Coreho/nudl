@@ -74,6 +74,7 @@ class NudlApp:
 
         self._lock = threading.Lock()
         self._last_clean: LastClean | None = None
+        self._own_write = clipboard.OwnWriteGuard()
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -105,6 +106,8 @@ class NudlApp:
     def _pump(self) -> None:
         self.window = MessageWindow()
         self.window.on(win32con.WM_HOTKEY, lambda _w, _l: self.on_hotkey())
+        self.window.on(clipboard.WM_CLIPBOARDUPDATE, lambda _w, _l: self.on_clipboard_update())
+
         try:
             hotkey.register(self.window.hwnd, HOTKEY_ID, self.config["hotkey"])
         except (hotkey.InvalidHotkey, hotkey.HotkeyUnavailable) as exc:
@@ -112,13 +115,44 @@ class NudlApp:
             # to be told, or nudl looks silently broken.
             logger.error("hotkey unavailable: %s", exc)
             self.ui.show_toast(f"nudl — {exc}. Pick another in Settings.", seconds=10)
+
+        # The listener is registered once and left in place for the life of the process;
+        # the handler simply does nothing when the mode is "hotkey". Registering and
+        # unregistering it on every mode switch would mean touching Win32 state from the
+        # tray thread, and buys nothing — an ignored message costs microseconds.
+        clipboard.add_format_listener(self.window.hwnd)
+
         self.window.pump()
 
     def _shutdown(self) -> None:
         if self.window is not None:
             hotkey.unregister(self.window.hwnd, HOTKEY_ID)
+            clipboard.remove_format_listener(self.window.hwnd)
             self.window.stop()
         self.ui.stop()
+
+    # -- auto-watch ----------------------------------------------------------------
+
+    def on_clipboard_update(self) -> None:
+        """Something changed the clipboard. Was it us? Was it a link? Should we act?"""
+        if self.config["mode"] != "auto":
+            return
+
+        sequence = clipboard.sequence_number()
+        try:
+            text = clipboard.get_text()
+        except clipboard.ClipboardBusy:
+            return  # someone else holds the lock; leave their clipboard alone
+
+        # The echo of our own write. Ignoring this is what stops the infinite loop.
+        if self._own_write.is_own_write(sequence, text):
+            return
+
+        url = clipboard.as_single_url(text)
+        if url is None:
+            return  # a paragraph, a file, an image, plain text — never touched
+
+        self.apply_clean(url)
 
     # -- the hotkey ----------------------------------------------------------------
 
@@ -146,10 +180,7 @@ class NudlApp:
         if not result.changed:
             return  # a no-op is silent: no toast, no clipboard write (FR-008)
 
-        try:
-            clipboard.set_text(result.result)
-        except clipboard.ClipboardBusy:
-            logger.warning("could not write the cleaned link; clipboard was locked")
+        if not self._write_clipboard(result.result):
             self.ui.show_toast("nudl — clipboard busy, link left alone", seconds=3)
             return
 
@@ -158,6 +189,20 @@ class NudlApp:
 
         self._log(result)
         self.ui.show_toast(self._describe(result), on_undo=self.undo)
+
+    def _write_clipboard(self, text: str) -> bool:
+        """The ONLY way nudl writes the clipboard. Always through the own-write guard.
+
+        Arm before the write, confirm after: a clipboard write nudl doesn't recognise as
+        its own would be re-cleaned by the auto-watcher, forever.
+        """
+        self._own_write.arm(text)
+        try:
+            self._own_write.confirm(clipboard.set_text(text))
+        except clipboard.ClipboardBusy:
+            logger.warning("could not write the clipboard; another process holds the lock")
+            return False
+        return True
 
     @staticmethod
     def _describe(result: clean.CleanResult) -> str:
@@ -184,15 +229,19 @@ class NudlApp:
         return True
 
     def undo(self) -> None:
-        """Restore the exact original clipboard content (FR-009)."""
+        """Restore the exact original clipboard content (FR-009).
+
+        In auto mode this is the subtlest write in the program: restoring the ugly
+        original puts a dirty link back on the clipboard, which the auto-watcher is
+        listening for. Without the own-write guard it would immediately re-clean it and
+        undo would be impossible. Hence `_write_clipboard`, never a raw `set_text`.
+        """
         with self._lock:
             last = self._last_clean
             self._last_clean = None
         if last is None:
             return
-        try:
-            clipboard.set_text(last.original)
-        except clipboard.ClipboardBusy:
+        if not self._write_clipboard(last.original):
             self.ui.show_toast("nudl — clipboard busy, could not undo", seconds=3)
             return
         self.ui.show_toast("nudl — undone", seconds=2)
