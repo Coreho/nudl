@@ -6,6 +6,10 @@ build/
 dist/
 *.egg-info/
 
+# Spec/agent tooling that produced the original design docs. Not part of the product.
+.opencode/
+.specify/
+
 # Virtual environments
 .venv/
 venv/
