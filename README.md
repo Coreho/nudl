@@ -146,13 +146,18 @@ Not satisfied? That's a completely reasonable place to land. Run it from source 
 
 ```
 .venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\python -m pytest      # 153 tests
+.venv\Scripts\python -m pytest      # 201 tests
 .venv\Scripts\python -m ruff check .
 ```
 
 The test suite is the specification. `src/tests/test_clean.py` holds 76 hand-vetted before/after
 URLs, 23 of them "looks like tracking but isn't" tripwires — the cases where a careless cleaner
 breaks a working link. It's the standing gate: if it isn't green, the build doesn't ship.
+
+`src/tests/integration/` drives the real Windows clipboard — a real message pump, a real listener,
+no test doubles anywhere. Those tests close nothing and fake nothing, which is why they found two
+bugs the mocked tests had been cheerfully passing over. They will skip themselves if nudl is
+already running, and they give you your clipboard back when they're done.
 
 ## License
 
