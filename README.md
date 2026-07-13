@@ -118,10 +118,12 @@ It's a small unsigned tool that reads your clipboard, so it's fair to be suspici
   else. It does **not** install a low-level keyboard hook — that's the keylogger technique, and
   nudl never sees any keystroke but its own shortcut.
 - It's open source, and the entire cleaning engine is one file: `src/clean.py`.
+- **[VirusTotal scan of the released `nudl.exe`](https://www.virustotal.com/gui/file/27a5c30a9c6a6b220bcb2f25bfc8f867ce5b108f9f8b8c882f7db83cfecc61ea)**
+  — that's the exact binary inside `nudl-0.1.0-win64.zip`
+  (SHA-256 `27a5c30a…61ea`; check it yourself with
+  `Get-FileHash nudl.exe`). Windows Defender scans it clean.
 - SmartScreen may still warn about an unsigned build. That means it doesn't recognise the
   publisher, not that it found anything.
-
-<!-- TODO(CP0.5): add the VirusTotal permalink for the released build here. -->
 
 ## Development
 
