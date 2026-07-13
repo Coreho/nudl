@@ -20,6 +20,7 @@ Nothing here performs I/O beyond reading the bundled rules file once.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -70,13 +71,11 @@ def load_rules(path: str | Path | None = None) -> dict[str, Any]:
     crash and not a nudl that silently stops cleaning.
     """
     if path is not None:
-        try:
+        with contextlib.suppress(OSError, ValueError):  # fall through to bundled defaults
             with open(path, encoding="utf-8") as fh:
                 rules = json.load(fh)
             if _rules_are_sane(rules):
                 return rules
-        except (OSError, ValueError):
-            pass  # fall through to bundled defaults
     return _bundled_rules()
 
 
