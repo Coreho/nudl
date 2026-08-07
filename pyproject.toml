@@ -7,15 +7,22 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "pywin32>=306; sys_platform == 'win32'",
-    "pystray>=0.19",
-    # tray.py imports PIL directly to draw the icon. pystray happens to pull Pillow in
-    # today, so this works undeclared — right up until it doesn't.
-    "Pillow>=9.2",
+    # Pinned, not floored. tray.py ships the pre-rendered icon through `_IcoBytes`,
+    # which satisfies pystray's private `_util.serialized_image` contract — it only
+    # calls `.save(fp, format=...)`. That is what lets nudl drop Pillow entirely.
+    # test_tray_icon.py guards the contract; this pin is what stops a silent minor
+    # upgrade from moving it underneath us between releases.
+    "pystray==0.19.*",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
-build = ["pyinstaller>=6"]
+# Pillow is a TOOLING dependency, never a runtime one: tools/make_icon.py renders the
+# .ico, docs/make_demo.py the README gif. Nothing reachable from run_nudl.py imports it,
+# which is what keeps its 12.8 MB of image codecs out of the download. It stays in `dev`
+# because the docs scripts are run by hand; test_tray_icon.py is what fails loudly if it
+# ever creeps back into the app's import graph.
+dev = ["pytest>=8", "ruff>=0.6", "Pillow>=9.2"]
+build = ["pyinstaller>=6", "Pillow>=9.2"]
 
 # Without these, `pip install nudl` installs a package with no way to start it.
 # `nudlw` is the windowed entry point (no console window); `nudl` keeps a console,
@@ -34,7 +41,7 @@ build-backend = "setuptools.build_meta"
 packages = ["src"]
 
 [tool.setuptools.package-data]
-src = ["rules.json"]
+src = ["rules.json", "nudl.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]

@@ -10,9 +10,9 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $python = Join-Path $root ".venv\Scripts\python.exe"
 
-# `python -c` puts the CWD on sys.path, and the icon render below imports src.tray. Run
-# from $root so that `.\build.ps1` invoked from anywhere still builds the same thing,
-# rather than silently importing nothing and writing the icon into some other directory.
+# PyInstaller resolves several things against the working directory — the .spec it
+# writes, and module lookup via --paths. Run from $root so that `.\build.ps1` invoked
+# from anywhere builds the same thing rather than something subtly different.
 Push-Location $root
 try {
 
@@ -48,29 +48,43 @@ Write-Host "Building nudl $version" -ForegroundColor Cyan
 Write-Host "Rendering the icon..." -ForegroundColor Cyan
 $buildDir = Join-Path $root "build"
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
-$icoPath = (Join-Path $buildDir "nudl.ico") -replace '\\', '/'
-& $python -c @"
-from src.tray import _icon_image
-sizes = [16, 24, 32, 48, 64, 128, 256]
-_icon_image(256).save('$icoPath', sizes=[(s, s) for s in sizes])
-print('  $icoPath')
-"@
-# Absolute path above, and an exit-code check here: PyInstaller is handed the absolute
-# build\nudl.ico regardless, so a render that failed or landed elsewhere would leave it
-# picking up a STALE icon from a previous build and saying nothing about it.
+# ONE icon file, at src\nudl.ico. PyInstaller embeds it as the exe resource AND ships it
+# as data, because tray.py now LOADS it at runtime rather than drawing with Pillow —
+# which is what keeps Pillow's 12.8 MB of codecs out of the download. Re-rendering here
+# instead of trusting the committed copy is what stops it drifting from make_icon.py.
+$icoPath = Join-Path $root "src\nudl.ico"
+& $python (Join-Path $root "tools\make_icon.py") $icoPath
+# An exit-code check, because PyInstaller is handed $icoPath regardless: a render that
+# failed would leave it picking up a STALE icon from a previous build, silently.
 if ($LASTEXITCODE -ne 0) { throw "icon render failed (exit $LASTEXITCODE)" }
+if (-not (Test-Path $icoPath)) { throw "icon render wrote no file at $icoPath" }
 
 Write-Host "Freezing with PyInstaller (--onedir)..." -ForegroundColor Cyan
 # Paths must be absolute: PyInstaller resolves --add-data relative to --specpath,
 # not to the working directory.
+#
+# The --exclude-module list is load-bearing, not tidiness. PyInstaller resolves imports
+# statically, so `urllib.parse` (all clean.py wants) dragged in urllib.request ->
+# http.client -> ssl, and `random` dragged in _hashlib: between them, 7.4 MB of OpenSSL
+# in a tool whose headline promise is that it makes no network calls. Nothing loads any
+# of it at runtime — verified against the live process — and scanners fingerprint the
+# bundled OpenSSL by version, so it was reported as vulnerable while never executing.
+# Dropping _hashlib leaves hashlib on its builtin sha2/md5 backends, which is all that
+# random.seed(str) and tempfile ever needed.
 & $python -m PyInstaller `
     --noconfirm `
     --clean `
     --onedir `
     --windowed `
     --name nudl `
-    --icon (Join-Path $root "build\nudl.ico") `
+    --icon $icoPath `
     --add-data "$(Join-Path $root 'src\rules.json');src" `
+    --add-data "$icoPath;src" `
+    --exclude-module ssl `
+    --exclude-module _ssl `
+    --exclude-module urllib.request `
+    --exclude-module http `
+    --exclude-module _hashlib `
     --paths $root `
     --distpath (Join-Path $root "dist") `
     --workpath (Join-Path $root "build\pyinstaller") `
@@ -94,7 +108,10 @@ $pythonDll = Get-ChildItem $internal -Filter "python*.dll" -ErrorAction Silently
 if (-not $pythonDll) { throw "build is incomplete: no python*.dll in _internal\" }
 
 $distMb = (Get-ChildItem (Join-Path $root "dist\nudl") -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
-if ($distMb -lt 20) { throw ("build is incomplete: dist is only {0:N1} MB (expected 20+)" -f $distMb) }
+# The floor exists to catch a half-built wreckage (the original bug shipped a 3.9 MB
+# archive that could not start), NOT to police the size. It moved from 20 to 12 when
+# dropping Pillow and OpenSSL took a healthy build from 44 MB to roughly 24.
+if ($distMb -lt 12) { throw ("build is incomplete: dist is only {0:N1} MB (expected 12+)" -f $distMb) }
 Write-Host ("  payload: {0:N1} MB, python DLL present" -f $distMb) -ForegroundColor Green
 
 $zip = Join-Path $root "dist\nudl-$version-win64.zip"

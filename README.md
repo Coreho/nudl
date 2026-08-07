@@ -146,7 +146,7 @@ Not satisfied? That's a completely reasonable place to land. Run it from source 
 
 ```
 .venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\python -m pytest      # 201 tests
+.venv\Scripts\python -m pytest      # 206 tests
 .venv\Scripts\python -m ruff check .
 ```
 

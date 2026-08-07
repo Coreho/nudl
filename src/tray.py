@@ -10,37 +10,44 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
+from typing import BinaryIO
 
 import pystray
-from PIL import Image, ImageDraw
 
 logger = logging.getLogger(__name__)
 
-_BG = (22, 24, 29, 255)
-_ACCENT = (76, 183, 130, 255)
+#: Rendered by `tools/make_icon.py` at build time and shipped beside this module.
+_ICO_PATH = Path(__file__).with_name("nudl.ico")
 
 
-def _icon_image(size: int = 64) -> Image.Image:
-    """A green 'n' on a dark rounded tile — legible at 16px in the tray."""
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=size // 5, fill=_BG)
+class _IcoBytes:
+    """The pre-rendered icon, shaped like the one thing pystray asks of an icon.
 
-    # Draw the 'n' as strokes rather than text: font availability varies by machine,
-    # and a missing glyph would leave an empty tray icon.
-    weight = max(3, size // 10)
-    left, right = size // 4, size - size // 4
-    top, bottom = size // 3, size - size // 4
-    draw.line((left, top, left, bottom), fill=_ACCENT, width=weight)
-    draw.line((right, top + weight, right, bottom), fill=_ACCENT, width=weight)
-    draw.arc(
-        (left, top - weight, right, top + (bottom - top) // 2),
-        start=180,
-        end=360,
-        fill=_ACCENT,
-        width=weight,
-    )
-    return image
+    pystray's Win32 backend does exactly two things with `Icon.icon`: it tests it for
+    truthiness, and it calls `.save(fp, format="ICO")` — see `pystray._util.
+    serialized_image`, which writes that to a temp file and hands the path to
+    `LoadImageW`. It never needs a real `PIL.Image`. Satisfying that single method is
+    what lets nudl ship the icon Pillow already rendered at build time and leave
+    Pillow's 12.8 MB of codecs out of the download entirely.
+
+    This leans on a private pystray detail, so `test_tray_icon.py` pins the contract
+    against the real `serialized_image`: an upgrade that changes it fails the suite
+    rather than a user's tray.
+    """
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def save(self, fp: BinaryIO, format: str | None = None, **_: object) -> None:
+        fp.write(self._data)
+
+
+def _tray_icon() -> _IcoBytes:
+    """Load the built icon. Read lazily so importing this module needs no asset."""
+    return _IcoBytes(_ICO_PATH.read_bytes())
 
 
 class Tray:
@@ -63,7 +70,7 @@ class Tray:
 
         self.icon = pystray.Icon(
             "nudl",
-            icon=_icon_image(),
+            icon=_tray_icon(),
             title="nudl — clean links",
             menu=pystray.Menu(
                 # The toast lasts seconds and the hotkey window is shorter still. Miss
