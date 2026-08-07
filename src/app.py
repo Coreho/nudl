@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -55,6 +56,11 @@ SINGLE_INSTANCE_MUTEX = "nudl-single-instance-mutex"
 
 #: Press the hotkey again within this many seconds of a clean to undo it.
 UNDO_WINDOW_SECONDS = 3.0
+
+#: A JSON error carries a line and a column and can run to a full sentence. The toast is
+#: a few words wide, so it gets a truncated copy; the untruncated reason is in the log,
+#: which is where a user goes to actually fix the file.
+RULES_ERROR_TOAST_CHARS = 90
 
 #: Rotate the audit log at this size.
 LOG_MAX_BYTES = 512 * 1024
@@ -177,7 +183,11 @@ class NudlApp:
         self.config = config.load()
         # Honour the configured rules_path. It was previously advertised in config.json
         # and then ignored, which is worse than not offering it at all.
-        self.rules = clean.load_rules(config.config_dir() / self.config["rules_path"])
+        #
+        # The whole RulesLoad is kept, not just the dict: `run()` needs to know whether
+        # what is loaded is what the user asked for, so it can say so out loud.
+        self._rules_load = self._load_rules()
+        self.rules = self._rules_load.rules
         self.ui = OverlayUI()
         self.window: MessageWindow | None = None
         self._window_released = False
@@ -198,6 +208,9 @@ class NudlApp:
     def run(self) -> None:
         self.ui.start()
 
+        # Not in `__init__`: there is no toast until the Tk thread exists.
+        self._warn_about_rules()
+
         if not self.config["first_run_complete"]:
             self._first_run()
 
@@ -210,6 +223,8 @@ class NudlApp:
             undo=self.undo,
             can_undo=self.can_undo,
             open_settings=self._open_settings,
+            open_rules=self._open_rules,
+            validate_rules=self._validate_rules,
             open_log=self._open_log,
             show_about=self._show_about,
             on_exit=self._shutdown,
@@ -293,6 +308,149 @@ class NudlApp:
         if self.window is not None:
             self.window.stop()
         self.ui.stop()
+
+    # -- the rule set --------------------------------------------------------------
+
+    def _load_rules(self) -> clean.RulesLoad:
+        """Pick the live rule set, and put which one it is in the log.
+
+        That log line is the only thing that tells "nudl is running on the bundled rules
+        because your file is broken" apart from "nudl has stopped working". From the
+        outside the two are identical: the icon sits there looking healthy while links
+        come back with trackers still on them.
+        """
+        path = config.rules_path(self.config)
+        load = clean.load_rules_verbose(path, backup=config.rules_backup_path(self.config))
+        logger.info("rules: using the %s set from %s", load.source, load.path)
+        if load.error is not None:
+            logger.error("rules: %s %s", path, load.error)
+        if load.source == "custom":
+            # The file has just parsed and passed the shape check, so it is known-good by
+            # definition. That is the only moment at which copying it is worth anything.
+            self._back_up_rules()
+        return load
+
+    def _back_up_rules(self) -> None:
+        """Keep the last rule file that WORKED beside the live one, as `<name>.bak`.
+
+        Only ever called once the active file has already loaded cleanly — that is what
+        makes the backup trustworthy. nudl never copies a file it could not parse.
+
+        Deliberately not a rename-then-restore dance. The rules file belongs to the user;
+        nudl writing over an edit they are halfway through, in order to "roll back", would
+        destroy work nobody asked it to touch. The backup is a spare nudl can RUN on for a
+        session, never something written back over the original.
+
+        Losing the backup costs a future fallback, not this run, so every failure is
+        logged and swallowed: a tool that refuses to start because it could not make a
+        copy of a file is worse than one running without a spare.
+        """
+        active = config.rules_path(self.config)
+        backup = config.rules_backup_path(self.config)
+        try:
+            data = active.read_bytes()
+            # Starting nudl should not rewrite a file on disk every single time; almost
+            # every launch finds the backup already identical.
+            if backup.exists() and backup.read_bytes() == data:
+                return
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            backup.write_bytes(data)
+        except OSError:
+            logger.warning("could not back up %s", active, exc_info=True)
+
+    def _warn_about_rules(self) -> None:
+        """Say out loud when nudl is not running the rules the user asked for.
+
+        Silent fallback is the exact failure this feature exists to remove: the user edits
+        rules.json, nothing complains, and the rule they added never fires.
+        """
+        error = self._rules_load.error
+        if error is None:
+            return
+
+        # A rules file that was never created is the DEFAULT install, not a fallback worth
+        # interrupting anyone about: `rules_path` points into the config dir, and nothing
+        # puts a file there until the user asks for one via Rules…. Toasting "rules.json
+        # does not exist" on every single launch is how a user learns to dismiss nudl's
+        # toasts unread — and the next one is the one that matters. The log still has it.
+        if not config.rules_path(self.config).exists():
+            return
+
+        if len(error) > RULES_ERROR_TOAST_CHARS:
+            error = error[: RULES_ERROR_TOAST_CHARS - 1].rstrip() + "…"
+        name = config.rules_path(self.config).name
+        if self._rules_load.source == "backup":
+            message = f"nudl — {name} {error}. Using the last version that worked."
+        else:
+            message = f"nudl — {name} {error}. Using the bundled rules."
+        self.ui.show_toast(message, seconds=10)
+
+    def _open_rules(self) -> None:
+        """Open the live rules file, seeding it from the bundled set when it is absent.
+
+        Seeded rather than created empty, and that matters: the bundled file is heavily
+        commented and lists every param nudl deliberately leaves alone, so a user who
+        opens it can see both what a rule looks like and why some obvious-looking
+        tracking keys are not stripped. A blank file invites reinventing all of that,
+        badly, and breaking links in the process.
+        """
+        path = config.rules_path(self.config)
+        if not path.exists():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(clean.BUNDLED_RULES_PATH, path)
+            except OSError:
+                logger.exception("could not seed %s from the bundled rules", path)
+                self.ui.show_toast(
+                    f"nudl — could not create {path.name}. Check the log.", seconds=6
+                )
+                return
+        self._open(path)
+
+    def _validate_rules(self) -> None:
+        """Re-read the rules file on demand: report what is in it, or what is wrong with it.
+
+        No `backup=` here, unlike startup. The question being asked is "is MY file valid",
+        and quietly answering it from the backup would hide the answer behind a file the
+        user did not just write.
+
+        On success the rules are ADOPTED, not merely reported on. Telling a user their
+        file is valid and then carrying on with the old set would leave nudl running rules
+        the user has already replaced — precisely the looks-healthy-does-nothing failure
+        this project refuses.
+
+        Threading: this runs on the tray thread while `apply_clean` runs on the pump
+        thread. `self.rules` is rebound in one atomic assignment and `clean_result` takes
+        the rule set by argument, so a clean already in flight finishes against whichever
+        set it had already read. A lock would buy nothing.
+        """
+        path = config.rules_path(self.config)
+        if not path.exists():
+            # Not a failure — it is the stock install. Answering "does not exist" and
+            # stopping there leaves the user with no idea that the file is theirs to
+            # create, or how.
+            self.ui.show_toast(
+                f"nudl — no {path.name} yet, so nudl is on the bundled rules. "
+                f"Use Rules… to make your own.",
+                seconds=8,
+            )
+            return
+
+        load = clean.load_rules_verbose(path)
+        if load.error is not None:
+            logger.error("validate: %s %s", path, load.error)
+            self.ui.show_toast(
+                f"nudl — {path.name} {load.error}. Still using the rules already loaded.",
+                seconds=10,
+            )
+            return
+
+        self._rules_load = load
+        self.rules = load.rules
+        self._back_up_rules()
+        summary = clean.summarize(load.rules)
+        logger.info("validate: adopted %s (%s)", load.path, summary.describe())
+        self.ui.show_toast(f"nudl — rules reloaded: {summary.describe()}", seconds=6)
 
     # -- auto-watch ----------------------------------------------------------------
 
@@ -523,7 +681,13 @@ class NudlApp:
         self._open(path)
 
     def _show_about(self) -> None:
-        self.ui.show_toast("nudl — local only. Your links never leave this machine.", seconds=6)
+        message = "nudl — local only. Your links never leave this machine."
+        # Rule freshness is the one thing about nudl a user cannot infer from watching it
+        # work: a stale rule set strips fewer trackers and looks exactly like a current one.
+        last_updated = clean.summarize(self.rules).last_updated
+        if last_updated:
+            message += f" Rules updated {last_updated}."
+        self.ui.show_toast(message, seconds=6)
 
     @staticmethod
     def _open(path: Path) -> None:

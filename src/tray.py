@@ -60,6 +60,8 @@ class Tray:
         undo: Callable[[], bool],
         can_undo: Callable[[], bool],
         open_settings: Callable[[], None],
+        open_rules: Callable[[], None],
+        validate_rules: Callable[[], None],
         open_log: Callable[[], None],
         show_about: Callable[[], None],
         on_exit: Callable[[], None],
@@ -104,6 +106,13 @@ class Tray:
                 ),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Settings…", lambda: open_settings()),
+                # The rules file is the whole product's behaviour in one editable document,
+                # and it was previously reachable only by a user who already knew the
+                # undocumented config key existed. "Validate rules" sits directly under it
+                # because editing a JSON file by hand and having no way to check it is how
+                # a user ends up on silently-fallen-back rules without knowing.
+                pystray.MenuItem("Rules…", lambda: open_rules()),
+                pystray.MenuItem("Validate rules", lambda: validate_rules()),
                 pystray.MenuItem("View log", lambda: open_log()),
                 pystray.MenuItem("About", lambda: show_about()),
                 pystray.Menu.SEPARATOR,

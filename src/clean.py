@@ -20,7 +20,6 @@ Nothing here performs I/O beyond reading the bundled rules file once.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import re
@@ -30,7 +29,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit, urlunsplit
 
-__all__ = ["CleanResult", "clean", "clean_result", "load_rules"]
+__all__ = [
+    "CleanResult",
+    "RulesLoad",
+    "RulesSummary",
+    "clean",
+    "clean_result",
+    "load_rules",
+    "load_rules_verbose",
+    "summarize",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +54,29 @@ SIGNED_EXACT_KEYS = frozenset(
     {"sig", "signature", "hmac", "token", "expires", "policy", "signedheaders"}
 )
 SIGNED_KEY_PREFIXES = ("x-amz-", "x-goog-", "x-ms-")
+
+#: The rules-file schema this engine understands. A file declaring a HIGHER version is
+#: refused rather than half-read: it was written for an engine that knows fields this one
+#: would silently ignore, and silently ignoring half a rule set is how nudl ends up
+#: looking healthy while cleaning nothing.
+SCHEMA_VERSION = "1.0"
+_SCHEMA_PARTS = (1, 0)
+
+#: Query keys that LOOK like tracking and are deliberately absent from every list, with
+#: the reason. `rules.json` explains these in prose for a human reading the file; this is
+#: the same knowledge in a form the validator can check a user's pattern against before
+#: they break their own links. `test_clean.py` holds the executable tripwires.
+NEVER_STRIP: dict[str, str] = {
+    "si": "Spotify/YouTube share id — removing it has broken shared-playlist flows.",
+    "sk": "Medium friend-link token — strip it and you paywall the article you shared.",
+    "hash": "eBay item identifier. Only the _trk* params there are tracking.",
+    "img_index": "Instagram: which photo in the carousel.",
+    "sid": "Booking.com session id.",
+    "context": "Reddit: how many parent comments to show.",
+    "keywords": "Amazon: /s?keywords=... IS the search query, not a tracker.",
+    "check_in": "Airbnb: the actual booking date.",
+    "check_out": "Airbnb: the actual booking date.",
+}
 
 
 @dataclass(frozen=True)
@@ -92,19 +123,122 @@ EMERGENCY_RULES: dict[str, Any] = {
 _RULE_LIST_KEYS = ("global_tracker_keys", "redirect_wrappers", "providers", "referral")
 
 
+@dataclass(frozen=True)
+class RulesLoad:
+    """Which rule set is live, where it came from, and why it is not the one you asked for."""
+
+    rules: dict[str, Any]
+    #: "custom" | "backup" | "bundled" | "emergency"
+    source: str
+    #: The file the rules were read from, when there was one.
+    path: Path | None = None
+    #: Why the REQUESTED file was refused. None when it was the one used.
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+
+@dataclass(frozen=True)
+class RulesSummary:
+    """What is actually in a rule set — the counts a user can check their own file against."""
+
+    global_keys: int
+    providers: int
+    provider_keys: int
+    wrappers: int
+    referral: int
+    schema_version: str
+    last_updated: str | None
+
+    def describe(self) -> str:
+        return (
+            f"{self.global_keys} global keys, {self.providers} providers, {self.wrappers} wrappers"
+        )
+
+
 def load_rules(path: str | Path | None = None) -> dict[str, Any]:
     """Load a rule set, falling back to the bundled defaults if anything is wrong.
 
     A user who corrupts their own rules.json gets a working nudl on defaults — not a
     crash, and not a nudl that silently stops cleaning.
     """
+    return load_rules_verbose(path).rules
+
+
+def load_rules_verbose(
+    path: str | Path | None = None, *, backup: str | Path | None = None
+) -> RulesLoad:
+    """`load_rules`, but it says which file it used and what was wrong with the other one.
+
+    Read-only, like the rest of this module. It will happily READ a backup somebody else
+    wrote, but it never writes one and it never touches the user's file: deciding to
+    overwrite something on disk is a policy call, and policy lives in `app.py`.
+
+    Order is the requested file, then its backup, then the bundled defaults. Preferring
+    the backup over the bundled set is the point of having one — a user who typos their
+    own rules keeps their customisations for this run instead of silently reverting to
+    stock and wondering why their links changed.
+    """
+    error: str | None = None
     if path is not None:
-        with contextlib.suppress(OSError, ValueError):  # fall through to bundled defaults
-            with open(path, encoding="utf-8") as fh:
-                rules = json.load(fh)
-            if _rules_are_sane(rules):
-                return rules
-    return _bundled_rules()
+        rules, error = _read_rules_file(path)
+        if rules is not None:
+            return RulesLoad(rules, "custom", Path(path))
+        if backup is not None:
+            restored, _ = _read_rules_file(backup)
+            if restored is not None:
+                return RulesLoad(restored, "backup", Path(backup), error)
+
+    bundled = _bundled_rules()
+    if bundled is EMERGENCY_RULES:
+        return RulesLoad(bundled, "emergency", None, error)
+    return RulesLoad(bundled, "bundled", BUNDLED_RULES_PATH, error)
+
+
+def _read_rules_file(path: str | Path) -> tuple[dict[str, Any] | None, str | None]:
+    """Read one rule file. Returns (rules, None), or (None, why it was refused).
+
+    The reason is the whole point: "your rules.json was ignored" with no cause is the
+    kind of message that sends a user hunting through their file blind.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rules = json.load(fh)
+    except FileNotFoundError:
+        return None, "does not exist"
+    except OSError as exc:
+        return None, f"could not be read ({exc.strerror or exc})"
+    except ValueError as exc:
+        return None, f"is not valid JSON ({exc})"
+
+    if not _rules_are_sane(rules):
+        return None, "is not a rule set (a rule list is missing or the wrong shape)"
+    schema_error = _schema_error(rules)
+    if schema_error is not None:
+        return None, schema_error
+    return rules, None
+
+
+def _schema_error(rules: dict[str, Any]) -> str | None:
+    """Refuse a file written for a newer engine. Absent means 1.0, the original shape."""
+    declared = rules.get("schema_version", SCHEMA_VERSION)
+    if not isinstance(declared, str):
+        return f"has a non-string schema_version ({declared!r})"
+    parsed = _version_parts(declared)
+    if parsed is None:
+        return f"has an unreadable schema_version ({declared!r})"
+    if parsed > _SCHEMA_PARTS:
+        return f"needs schema_version {declared}; this nudl understands {SCHEMA_VERSION}"
+    return None
+
+
+def _version_parts(version: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
 
 
 def _rules_are_sane(rules: object) -> bool:
@@ -136,6 +270,31 @@ def _bundled_rules() -> dict[str, Any]:
         logger.error("bundled rules.json is malformed; falling back to emergency rules")
         return EMERGENCY_RULES
     return rules
+
+
+def summarize(rules: dict[str, Any]) -> RulesSummary:
+    """Count what a rule set contains, so a user can confirm their file really loaded."""
+    providers = [p for p in _as_list(rules.get("providers")) if isinstance(p, dict)]
+    last_updated = rules.get("last_updated")
+    return RulesSummary(
+        global_keys=len(_as_list(rules.get("global_tracker_keys"))),
+        providers=len(providers),
+        provider_keys=sum(
+            len(_as_list(p.get("rules")))
+            + len(_as_list(p.get("referral")))
+            + len(_as_list(p.get("rawRules")))
+            for p in providers
+        ),
+        wrappers=len(_as_list(rules.get("redirect_wrappers"))),
+        referral=len(_as_list(rules.get("referral"))),
+        schema_version=str(rules.get("schema_version", SCHEMA_VERSION)),
+        last_updated=last_updated if isinstance(last_updated, str) else None,
+    )
+
+
+def _as_list(value: object) -> list[Any]:
+    """A rule set is user-editable, so any field may be the wrong type. Count nothing."""
+    return value if isinstance(value, list) else []
 
 
 # ---------------------------------------------------------------------------------------

@@ -29,6 +29,10 @@ build = ["pyinstaller>=6", "Pillow>=9.2"]
 # which is what you want when something is going wrong.
 [project.scripts]
 nudl = "src.app:main"
+# The validator is a console tool by nature — it prints a report and exits. It is listed
+# separately so `pip install nudl` gives a user a way to check their rules file without
+# knowing that `python -m src.validate` exists.
+nudl-validate = "src.validate:main"
 
 [project.gui-scripts]
 nudlw = "src.app:main"

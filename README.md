@@ -107,11 +107,52 @@ identifies the item. Instagram's `img_index=` picks which photo. Amazon's `keywo
 the search. Each of those has a test guarding it, because breaking a link the user needed
 always outranks removing a tracker.
 
-The rule set is one readable file, [`src/rules.json`](src/rules.json). Edit it freely; if you
-break it, nudl falls back to the bundled defaults rather than failing.
+### Your own rules
+
+The rule set is one readable file, [`src/rules.json`](src/rules.json) — and you can replace it
+without rebuilding anything. **Tray → Rules…** opens your own copy at `%AppData%\nudl\rules.json`,
+seeded from the bundled file so you start with every comment and every deliberate omission
+intact. Edit it, then **Tray → Validate rules** re-reads it and says what loaded: *"rules
+reloaded: 26 global keys, 16 providers, 9 wrappers"*.
+
+Break it and nudl tells you, instead of quietly reverting. The last version that loaded cleanly
+is kept beside it as `rules.json.bak` and nudl runs on *that* for the session, so your
+customisations survive your typo. **nudl never writes over your rules file** — the broken one
+stays exactly as you left it, waiting to be fixed. (A file declaring a `schema_version` newer
+than this engine understands is refused outright rather than half-read.)
 
 Domains you never want touched go in `exceptions` in `%AppData%\nudl\config.json`. That's a
 list *you* write; nudl just compares hostnames against it locally.
+
+### Checking a rule before it goes live
+
+`nudl-validate` (or `python -m src.validate`) shows you exactly what a rule would do — before it
+goes anywhere near your links. Local and offline, like everything else here. It comes with the
+source install; the packaged download ships **Tray → Validate rules**, which is the same check
+on the whole file.
+
+```
+> nudl-validate --test "^utm_.*$" --url "https://www.amazon.com/dp/B08X?utm_source=google&tag=aff-20&v=123"
+Pattern:  ^utm_.*$  (anchored regex)
+Before:   https://www.amazon.com/dp/B08X?utm_source=google&tag=aff-20&v=123
+After:    https://www.amazon.com/dp/B08X?tag=aff-20&v=123
+Removed:  utm_source
+Kept:     tag, v
+```
+
+It knows which parameters are load-bearing, so it argues back:
+
+```
+> nudl-validate --test "si" --url "https://youtube.com/watch?v=abc&si=share123"
+Removed:  si
+warning 'si' matches 'si', which is deliberately absent: Spotify/YouTube share id — removing
+        it has broken shared-playlist flows.
+```
+
+`--check` audits the whole file and exits non-zero if anything is broken. With no arguments you
+get an interactive prompt to `test`, `add`, `remove`, `save` and try wrappers and rawRules
+against sample URLs. It drives the **real** engine rather than a reimplementation, so what it
+shows is what nudl will do — and it never edits your live rules file; `save` refuses that path.
 
 nudl does **not** bundle ClearURLs' rules data — it ships under a separate, unverified license,
 and its 600-provider long tail is irrelevant for "clean the link I just copied." A rule set you
@@ -146,7 +187,7 @@ Not satisfied? That's a completely reasonable place to land. Run it from source 
 
 ```
 .venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\python -m pytest      # 206 tests
+.venv\Scripts\python -m pytest      # 284 tests
 .venv\Scripts\python -m ruff check .
 ```
 

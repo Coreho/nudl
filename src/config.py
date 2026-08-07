@@ -40,6 +40,23 @@ def log_path() -> Path:
     return config_dir() / "clean.log"
 
 
+def rules_path(cfg: dict[str, Any] | None = None) -> Path:
+    """The rule file nudl actually reads.
+
+    `rules_path` may be a bare name (resolved inside the config dir, which is where a
+    user would put it) or an absolute path — `Path.__truediv__` already returns the
+    absolute operand unchanged, so both work with no branch here.
+    """
+    name = (cfg or DEFAULTS).get("rules_path") or DEFAULTS["rules_path"]
+    return config_dir() / str(name)
+
+
+def rules_backup_path(cfg: dict[str, Any] | None = None) -> Path:
+    """The last rule file that loaded cleanly, kept beside it as `<name>.bak`."""
+    active = rules_path(cfg)
+    return active.with_name(active.name + ".bak")
+
+
 def load(path: str | Path | None = None) -> dict[str, Any]:
     """Read config, falling back to defaults for anything missing or malformed."""
     cfg = dict(DEFAULTS)
