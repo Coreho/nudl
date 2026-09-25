@@ -66,6 +66,12 @@ It's an unsigned build, so SmartScreen will show *"Windows protected your PC."* 
 **More info → Run anyway**. See [Is it safe?](#is-it-safe) — I'd rather tell you up front than
 have you find out.
 
+Or with [winget](https://learn.microsoft.com/windows/package-manager/winget/):
+
+```
+winget install Coreho.nudl
+```
+
 Or with [Scoop](https://scoop.sh):
 
 ```
