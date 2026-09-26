@@ -130,9 +130,9 @@ CORPUS: list[tuple[str, str, str]] = [
         "https://www.youtube.com/watch?v=abc&list=PL123&index=2",
     ),
     (
-        "youtu.be si preserved (v0 keeps si everywhere)",
+        "youtu.be si stripped — on YouTube it only says who shared the video",
         "https://youtu.be/abc?si=xyz",
-        "https://youtu.be/abc?si=xyz",
+        "https://youtu.be/abc",
     ),
     (
         "spotify si preserved — removing it has broken shared-playlist flows",
@@ -296,6 +296,32 @@ CORPUS: list[tuple[str, str, str]] = [
         "https://www.linkedin.com/posts/someone_activity-123",
     ),
     (
+        "youtube share button: si goes, the timestamp stays",
+        "https://youtu.be/dQw4w9WgXcQ?si=Ab12Cd34Ef56&t=42",
+        "https://youtu.be/dQw4w9WgXcQ?t=42",
+    ),
+    (
+        "instagram share button (igsh, the successor to igshid)",
+        "https://www.instagram.com/reel/C1abcDEF/?igsh=MWx0bHk3cWZ6",
+        "https://www.instagram.com/reel/C1abcDEF/",
+    ),
+    (
+        "facebook share button (mibextid)",
+        "https://www.facebook.com/share/p/1AbCdEf/?mibextid=WC7FNe",
+        "https://www.facebook.com/share/p/1AbCdEf/",
+    ),
+    (
+        "linkedin share carries the sharer's member id (rcm)",
+        "https://www.linkedin.com/posts/someone_activity-123"
+        "?utm_source=share&utm_medium=member_desktop&rcm=ACoAAB12cd",
+        "https://www.linkedin.com/posts/someone_activity-123",
+    ),
+    (
+        "tiktok copy-link payload (_t, _r)",
+        "https://www.tiktok.com/@user/video/123?_t=8abcDEF&_r=1",
+        "https://www.tiktok.com/@user/video/123",
+    ),
+    (
         "tiktok share",
         "https://www.tiktok.com/@user/video/123?is_from_webapp=1&sender_device=pc",
         "https://www.tiktok.com/@user/video/123",
@@ -391,9 +417,14 @@ CORPUS: list[tuple[str, str, str]] = [
         "https://www.airbnb.com/rooms/9?check_in=2026-08-01&check_out=2026-08-05",
     ),
     (
-        "TRIPWIRE: YouTube 'si' survives even sitting next to a stripped 'feature'",
-        "https://youtu.be/abc?si=xyz&feature=share",
-        "https://youtu.be/abc?si=xyz",
+        "TRIPWIRE: Spotify 'si' survives even sitting next to a stripped tracker",
+        "https://open.spotify.com/playlist/abc?si=xyz&utm_source=copy-link",
+        "https://open.spotify.com/playlist/abc?si=xyz",
+    ),
+    (
+        "TRIPWIRE: YouTube's 'si' exemption stays on YouTube",
+        "https://example.com/watch?si=xyz&feature=share",
+        "https://example.com/watch?si=xyz&feature=share",
     ),
     (
         "TRIPWIRE: a ';' makes the pair ambiguous — dropping it could destroy 'id=5'",

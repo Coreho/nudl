@@ -12,7 +12,7 @@ Matching is on the parameter **key**, case-insensitively, and never on its value
 
 These ride along to whatever site you land on, so they are stripped on every host.
 
-`^utm_.*$` `fbclid` `gclid` `dclid` `gbraid` `wbraid` `msclkid` `ttclid` `twclid` `li_fat_id` `yclid` `rdt_cid` `epik` `_openstat` `mc_eid` `mc_cid` `igshid` `vero_id` `vero_conv` `_hsenc` `_hsmi` `oly_enc_id` `oly_anon_id` `^ss_.*$` `icid` `mkt_tok`
+`^utm_.*$` `fbclid` `gclid` `dclid` `gbraid` `wbraid` `msclkid` `ttclid` `twclid` `li_fat_id` `yclid` `rdt_cid` `epik` `_openstat` `mc_eid` `mc_cid` `igshid` `igsh` `vero_id` `vero_conv` `_hsenc` `_hsmi` `oly_enc_id` `oly_anon_id` `^ss_.*$` `icid` `mkt_tok`
 
 `^utm_.*$` is an anchored regex: it matches `utm_source`, `utm_medium`, `utm_campaign`,
 `utm_term`, `utm_content` and any other `utm_` key, but **not** `utm` used as a value.
@@ -22,10 +22,11 @@ These ride along to whatever site you land on, so they are stripped on every hos
 | Site | Parameters removed |
 | --- | --- |
 | **amazon** | `tag` `ref_` `ref` `pd_rd_*` `pf_rd_*` `qid` `sr` `content-id` `sprefix` `crid` `dib` `dib_tag` `_encoding` `smid` `linkCode` `creative` `creativeASIN` |
-| **youtube** | `feature` `kw` `pp` |
+| **youtube** | `feature` `kw` `pp` `si` |
 | **twitter** | `s` `t` `ref_src` `ref_url` |
-| **linkedin** | `trk` `trackingId` `lipi` `licu` `originalSubdomain` |
-| **tiktok** | `is_from_webapp` `sender_device` `sender_web_id` `web_id` `refer` |
+| **linkedin** | `trk` `trackingId` `lipi` `licu` `originalSubdomain` `rcm` |
+| **facebook** | `mibextid` |
+| **tiktok** | `is_from_webapp` `sender_device` `sender_web_id` `web_id` `refer` `_t` `_r` `is_copy_url` |
 | **reddit** | `share_id` `correlation_id` `ref` `ref_source` `rdt` |
 | **substack** | `r` `triedRedirect` `showWelcome` |
 | **ebay** | `_trksid` `_trkparms` `_from` `amdata` `mkcid` `mkrid` `campid` |
@@ -62,7 +63,7 @@ Each has a test in `src/tests/test_clean.py` so nobody helpfully adds them later
 
 | Parameter | Site | Why it stays |
 | --- | --- | --- |
-| `si` | Spotify / YouTube | Share id. Removing it has broken shared-playlist flows. |
+| `si` | Spotify | Share id. Removing it has broken shared-playlist flows. (YouTube's `si` is only a tracker, and is stripped.) |
 | `sk` | Medium | **Friend-link token.** Strip it and you paywall the article. |
 | `hash` | eBay | Identifies the item. Only the `_trk*` params there are tracking. |
 | `img_index` | Instagram | Which photo in the carousel. |
@@ -86,4 +87,4 @@ Each has a test in `src/tests/test_clean.py` so nobody helpfully adds them later
 
 ---
 
-26 global keys · 85 site-specific keys across 16 sites · 9 redirect wrappers.
+27 global keys · 91 site-specific keys across 17 sites · 9 redirect wrappers.

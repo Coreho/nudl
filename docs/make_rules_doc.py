@@ -16,7 +16,12 @@ OUT = ROOT / "docs" / "RULES.md"
 # The "deliberately absent" notes live in rules.json's $comment block, but they are the
 # most important thing on this page, so they are restated here as structured data.
 NEVER_STRIPPED = [
-    ("si", "Spotify / YouTube", "Share id. Removing it has broken shared-playlist flows."),
+    (
+        "si",
+        "Spotify",
+        "Share id. Removing it has broken shared-playlist flows. "
+        "(YouTube's `si` is only a tracker, and is stripped.)",
+    ),
     ("sk", "Medium", "**Friend-link token.** Strip it and you paywall the article."),
     ("hash", "eBay", "Identifies the item. Only the `_trk*` params there are tracking."),
     ("img_index", "Instagram", "Which photo in the carousel."),

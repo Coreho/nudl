@@ -79,7 +79,7 @@ _SCHEMA_PARTS = (1, 0)
 #: the same knowledge in a form the validator can check a user's pattern against before
 #: they break their own links. `test_clean.py` holds the executable tripwires.
 NEVER_STRIP: dict[str, str] = {
-    "si": "Spotify/YouTube share id — removing it has broken shared-playlist flows.",
+    "si": "Spotify share id — removing it has broken shared-playlist and invite flows.",
     "sk": "Medium friend-link token — strip it and you paywall the article you shared.",
     "hash": "eBay item identifier. Only the _trk* params there are tracking.",
     "img_index": "Instagram: which photo in the carousel.",
@@ -89,6 +89,13 @@ NEVER_STRIP: dict[str, str] = {
     "check_in": "Airbnb: the actual booking date.",
     "check_out": "Airbnb: the actual booking date.",
 }
+
+#: The only sanctioned exceptions to NEVER_STRIP: a key that may be stripped by the named
+#: providers, on their own sites, and nowhere else. YouTube's `si` is the whole list. On
+#: YouTube it identifies who shared the video and changes nothing about what plays; it is
+#: also the tracker people paste most. Spotify's `si`, the one that has broken things,
+#: stays protected — and a global `si` rule still trips every guard that exists.
+NEVER_STRIP_EXCEPT_ON: dict[str, frozenset[str]] = {"si": frozenset({"youtube"})}
 
 
 @dataclass(frozen=True)

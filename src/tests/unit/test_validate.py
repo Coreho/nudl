@@ -105,6 +105,24 @@ def test_a_pattern_matching_a_never_strip_key_warns_with_the_reason(pattern: str
     assert "deliberately absent" in _text(findings)
 
 
+def test_youtube_may_strip_si_but_nobody_else_is_let_off() -> None:
+    """The one exemption is scoped to a provider; it must not leak to Spotify or globally."""
+    refused = "matches 'si', which is deliberately absent"
+    assert refused not in _text(validate.check_pattern("si", "", "youtube"))
+    assert refused in _text(validate.check_pattern("si", "", "spotify"))
+    assert refused in _text(validate.check_pattern("si"))
+
+
+def test_the_shipped_rules_pass_their_own_check() -> None:
+    """`nudl-validate --check` on the bundled file must find nothing broken in it.
+
+    Warnings are allowed — Twitter's exact `s` is one, deliberately — errors are not.
+    """
+    path = clean.BUNDLED_RULES_PATH
+    findings = validate._check_findings(path, clean.load_rules_verbose(path))
+    assert [f.describe() for f in findings if f.level == "error"] == []
+
+
 def test_a_pattern_matching_everything_is_an_error() -> None:
     """`^.*$` is not a rule, it is a decision to strip every parameter on every link."""
     findings = validate.check_pattern("^.*$", "global_tracker_keys[0]")

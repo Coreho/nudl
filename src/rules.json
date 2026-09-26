@@ -11,8 +11,9 @@
     "",
     "DELIBERATELY ABSENT — these look like trackers and are NOT safe to strip. Each has a",
     "tripwire test in tests/test_clean.py so nobody 'helpfully' adds them later:",
-    "  si         — Spotify/YouTube share id. Removing it has broken shared-playlist and",
-    "               'who invited you' flows. Kept everywhere.",
+    "  si         — Spotify share id. Removing it has broken shared-playlist and 'who",
+    "               invited you' flows. Kept everywhere EXCEPT by the youtube provider:",
+    "               on YouTube it is only a share tracker, and the one people paste most.",
     "  sk         — Medium FRIEND LINK token. Strip it and you paywall the article you were",
     "               trying to share.",
     "  hash       — eBay item identifier. Only the _trk* params there are tracking.",
@@ -27,7 +28,7 @@
   ],
 
   "schema_version": "1.0",
-  "last_updated": "2026-07-13",
+  "last_updated": "2026-09-26",
 
   "global_tracker_keys": [
     "^utm_.*$",
@@ -47,6 +48,7 @@
     "mc_eid",
     "mc_cid",
     "igshid",
+    "igsh",
     "vero_id",
     "vero_conv",
     "_hsenc",
@@ -103,7 +105,7 @@
       "name": "youtube",
       "urlPattern": "(^|\\.)youtube\\.com$|(^|\\.)youtu\\.be$",
       "exceptions": [],
-      "rules": ["feature", "kw", "pp"],
+      "rules": ["feature", "kw", "pp", "si"],
       "rawRules": [],
       "referral": []
     },
@@ -119,7 +121,15 @@
       "name": "linkedin",
       "urlPattern": "(^|\\.)linkedin\\.com$",
       "exceptions": [],
-      "rules": ["trk", "trackingId", "lipi", "licu", "originalSubdomain"],
+      "rules": ["trk", "trackingId", "lipi", "licu", "originalSubdomain", "rcm"],
+      "rawRules": [],
+      "referral": []
+    },
+    {
+      "name": "facebook",
+      "urlPattern": "(^|\\.)facebook\\.com$",
+      "exceptions": [],
+      "rules": ["mibextid"],
       "rawRules": [],
       "referral": []
     },
@@ -127,7 +137,16 @@
       "name": "tiktok",
       "urlPattern": "(^|\\.)tiktok\\.com$",
       "exceptions": [],
-      "rules": ["is_from_webapp", "sender_device", "sender_web_id", "web_id", "refer"],
+      "rules": [
+        "is_from_webapp",
+        "sender_device",
+        "sender_web_id",
+        "web_id",
+        "refer",
+        "_t",
+        "_r",
+        "is_copy_url"
+      ],
       "rawRules": [],
       "referral": []
     },

@@ -241,17 +241,17 @@ def test_the_bundled_rules_summarise_to_their_shipped_counts() -> None:
     """
     summary = clean.summarize(clean.load_rules())
 
-    assert summary.global_keys == 26
-    assert summary.providers == 16
+    assert summary.global_keys == 27
+    assert summary.providers == 17
     assert summary.wrappers == 9
     assert summary.referral == 4
     assert summary.schema_version == "1.0"
-    assert summary.last_updated == "2026-07-13"
+    assert summary.last_updated == "2026-09-26"
 
 
 def test_describe_reads_as_a_sentence() -> None:
     summary = clean.summarize(clean.load_rules())
-    assert summary.describe() == "26 global keys, 16 providers, 9 wrappers"
+    assert summary.describe() == "27 global keys, 17 providers, 9 wrappers"
 
 
 def test_wrong_typed_fields_summarise_to_zero_instead_of_raising() -> None:
@@ -283,16 +283,18 @@ def test_a_non_string_last_updated_is_none() -> None:
 # ---------------------------------------------------------------------------------------
 
 
-def shipped_patterns() -> list[tuple[str, str]]:
-    """Every key pattern in the bundled rule set, paired with where it came from."""
+def shipped_patterns() -> list[tuple[str, str, str | None]]:
+    """Every key pattern in the bundled rule set: where it came from, and its provider."""
     rules = clean.load_rules()
-    found = [("global_tracker_keys", p) for p in rules.get("global_tracker_keys", [])]
-    found += [("referral", p) for p in rules.get("referral", [])]
+    found = [("global_tracker_keys", p, None) for p in rules.get("global_tracker_keys", [])]
+    found += [("referral", p, None) for p in rules.get("referral", [])]
     for provider in rules.get("providers", []):
         name = provider.get("name", "?")
-        found += [(f"providers[{name}].rules", p) for p in provider.get("rules", [])]
-        found += [(f"providers[{name}].referral", p) for p in provider.get("referral", [])]
-    return [(where, p) for where, p in found if isinstance(p, str)]
+        found += [(f"providers[{name}].rules", p, name) for p in provider.get("rules", [])]
+        found += [
+            (f"providers[{name}].referral", p, name) for p in provider.get("referral", [])
+        ]
+    return [(where, p, owner) for where, p, owner in found if isinstance(p, str)]
 
 
 def test_no_shipped_pattern_matches_a_never_strip_key() -> None:
@@ -308,9 +310,23 @@ def test_no_shipped_pattern_matches_a_never_strip_key() -> None:
 
     offences = [
         f"{where}: pattern {pattern!r} matches NEVER_STRIP key {key!r} — {why}"
-        for where, pattern in patterns
+        for where, pattern, owner in patterns
         for key, why in clean.NEVER_STRIP.items()
         if clean._key_matcher(pattern).fullmatch(key)
+        and owner not in clean.NEVER_STRIP_EXCEPT_ON.get(key, ())
     ]
 
     assert not offences, "\n".join(offences)
+
+
+def test_the_exceptions_to_never_strip_stay_on_their_own_sites() -> None:
+    """An exception is a provider name, never a global rule and never a dropped key.
+
+    YouTube may strip `si`. That must not quietly turn into "si is fine to strip", which
+    would break every shared Spotify playlist — so the exempted key has to stay on the
+    NEVER_STRIP list, and every exempted provider has to actually exist.
+    """
+    names = {p.get("name") for p in clean.load_rules().get("providers", [])}
+    for key, providers in clean.NEVER_STRIP_EXCEPT_ON.items():
+        assert key in clean.NEVER_STRIP, f"{key!r} is exempted but no longer protected"
+        assert providers <= names, f"{key!r} exempted for unknown providers {providers - names}"

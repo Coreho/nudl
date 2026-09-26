@@ -164,7 +164,7 @@ def _pattern_kind(pattern: str) -> str:
     return "exact key"
 
 
-def check_pattern(pattern: str, where: str = "") -> list[Finding]:
+def check_pattern(pattern: str, where: str = "", provider: str | None = None) -> list[Finding]:
     """Everything that can be said about one tracker pattern without a URL to try it on."""
     if not pattern.strip():
         return [
@@ -211,6 +211,8 @@ def check_pattern(pattern: str, where: str = "") -> list[Finding]:
         )
 
     for key, reason in clean.NEVER_STRIP.items():
+        if provider in clean.NEVER_STRIP_EXCEPT_ON.get(key, ()):
+            continue  # a sanctioned, site-scoped exception — see NEVER_STRIP_EXCEPT_ON
         if matcher.fullmatch(key):
             findings.append(
                 Finding(
@@ -295,7 +297,9 @@ def _as_list(value: object, where: str) -> tuple[list[Any], list[Finding]]:
     return value, []
 
 
-def _check_patterns(container: dict[str, Any], key: str, where: str | None = None) -> list[Finding]:
+def _check_patterns(
+    container: dict[str, Any], key: str, where: str | None = None, provider: str | None = None
+) -> list[Finding]:
     """One list of tracker patterns, wherever it lives."""
     where = where or key
     values, findings = _as_list(container.get(key), where)
@@ -306,7 +310,7 @@ def _check_patterns(container: dict[str, Any], key: str, where: str | None = Non
                 Finding("error", spot, f"is a {type(value).__name__}, not a pattern string")
             )
             continue
-        findings += check_pattern(value, spot)
+        findings += check_pattern(value, spot, provider)
     return findings
 
 
@@ -432,8 +436,9 @@ def _check_providers(rules: dict[str, Any]) -> list[Finding]:
         # The name is what a user searches the file for; the index alone sends them counting.
         label = f"{spot} ({name})" if isinstance(name, str) and name else spot
         findings += _check_url_pattern(provider.get("urlPattern"), f"{label}.urlPattern")
-        findings += _check_patterns(provider, "rules", f"{label}.rules")
-        findings += _check_patterns(provider, "referral", f"{label}.referral")
+        owner = name if isinstance(name, str) else None
+        findings += _check_patterns(provider, "rules", f"{label}.rules", owner)
+        findings += _check_patterns(provider, "referral", f"{label}.referral", owner)
         findings += _check_regexes(provider, "exceptions", f"{label}.exceptions")
         findings += _check_raw_rules(provider, f"{label}.rawRules")
     return findings
