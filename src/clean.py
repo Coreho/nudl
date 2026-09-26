@@ -24,6 +24,7 @@ import ipaddress
 import json
 import logging
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -34,10 +35,14 @@ __all__ = [
     "CleanResult",
     "RulesLoad",
     "RulesSummary",
+    "TextCleanResult",
     "clean",
     "clean_result",
+    "clean_text",
+    "find_links",
     "load_rules",
     "load_rules_verbose",
+    "merge_rules",
     "summarize",
 ]
 
@@ -139,7 +144,9 @@ EMERGENCY_RULES: dict[str, Any] = {
     "providers": [],
 }
 
-_RULE_LIST_KEYS = ("global_tracker_keys", "redirect_wrappers", "providers", "referral")
+#: `keep` is the user's side of the ledger: exact keys nudl must never strip, whatever any
+#: pattern says. The bundled set has none — its deliberate omissions are simply absent.
+_RULE_LIST_KEYS = ("global_tracker_keys", "redirect_wrappers", "providers", "referral", "keep")
 
 
 @dataclass(frozen=True)
@@ -153,6 +160,10 @@ class RulesLoad:
     path: Path | None = None
     #: Why the REQUESTED file was refused. None when it was the one used.
     error: str | None = None
+    #: The user's own file as written, before it was layered onto the bundled set. The
+    #: validator checks THIS — reporting the bundled rules' warnings as if they were in the
+    #: user's file would send them looking for lines they never wrote.
+    own: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -170,6 +181,7 @@ class RulesSummary:
     referral: int
     schema_version: str
     last_updated: str | None
+    keep: int = 0
 
     def describe(self) -> str:
         return (
@@ -191,6 +203,11 @@ def load_rules_verbose(
 ) -> RulesLoad:
     """`load_rules`, but it says which file it used and what was wrong with the other one.
 
+    A user's file is LAYERED onto the bundled set, never swapped in for it: what they wrote
+    is added, and `keep` switches bundled rules off. It used to replace the bundled set
+    outright, which meant that opening Rules… once froze that user's rules forever — every
+    tracker added in a later release silently passed them by.
+
     Read-only, like the rest of this module. It will happily READ a backup somebody else
     wrote, but it never writes one and it never touches the user's file: deciding to
     overwrite something on disk is a policy call, and policy lives in `app.py`.
@@ -201,16 +218,17 @@ def load_rules_verbose(
     stock and wondering why their links changed.
     """
     error: str | None = None
+    bundled = _bundled_rules()
     if path is not None:
-        rules, error = _read_rules_file(path)
-        if rules is not None:
-            return RulesLoad(rules, "custom", Path(path))
+        own, error = _read_rules_file(path)
+        if own is not None:
+            return RulesLoad(merge_rules(bundled, own), "custom", Path(path), own=own)
         if backup is not None:
             restored, _ = _read_rules_file(backup)
             if restored is not None:
-                return RulesLoad(restored, "backup", Path(backup), error)
+                merged = merge_rules(bundled, restored)
+                return RulesLoad(merged, "backup", Path(backup), error, own=restored)
 
-    bundled = _bundled_rules()
     if bundled is EMERGENCY_RULES:
         return RulesLoad(bundled, "emergency", None, error)
     return RulesLoad(bundled, "bundled", BUNDLED_RULES_PATH, error)
@@ -291,6 +309,52 @@ def _bundled_rules() -> dict[str, Any]:
     return rules
 
 
+def merge_rules(base: dict[str, Any], own: dict[str, Any]) -> dict[str, Any]:
+    """`own` layered onto `base`: every list is a union, and base's entries come first.
+
+    A provider in `own` with the same name as one in `base` extends it — its rules,
+    referral keys, exceptions and rawRules are added, and base's urlPattern stands. A
+    provider with a new name is added whole. Nothing in `own` can remove anything from
+    `base`; `keep` is how a user switches a bundled rule off, and the engine enforces it at
+    the moment of stripping, so it beats even a regex like `^utm_.*$`.
+
+    Entries of the wrong type are dropped here rather than carried into the engine, where
+    one dict in a list of patterns would fail every single clean.
+    """
+    merged = dict(base)
+    for key in ("global_tracker_keys", "referral", "keep"):
+        merged[key] = _union(_strings(base.get(key)), _strings(own.get(key)))
+    merged["redirect_wrappers"] = _union(
+        _dicts(base.get("redirect_wrappers")), _dicts(own.get("redirect_wrappers"))
+    )
+
+    providers = [dict(p) for p in _dicts(base.get("providers"))]
+    by_name = {p.get("name"): p for p in providers if isinstance(p.get("name"), str)}
+    for extra in _dicts(own.get("providers")):
+        name = extra.get("name")
+        target = by_name.get(name) if isinstance(name, str) else None
+        if target is None:
+            providers.append(dict(extra))
+            continue
+        for list_key in ("rules", "referral", "exceptions"):
+            target[list_key] = _union(_strings(target.get(list_key)), _strings(extra.get(list_key)))
+        target["rawRules"] = _union(_dicts(target.get("rawRules")), _dicts(extra.get("rawRules")))
+    merged["providers"] = providers
+    return merged
+
+
+def _union(first: list[Any], second: list[Any]) -> list[Any]:
+    return first + [item for item in second if item not in first]
+
+
+def _strings(value: object) -> list[str]:
+    return [item for item in _as_list(value) if isinstance(item, str)]
+
+
+def _dicts(value: object) -> list[dict[str, Any]]:
+    return [item for item in _as_list(value) if isinstance(item, dict)]
+
+
 def summarize(rules: dict[str, Any]) -> RulesSummary:
     """Count what a rule set contains, so a user can confirm their file really loaded."""
     providers = [p for p in _as_list(rules.get("providers")) if isinstance(p, dict)]
@@ -308,6 +372,7 @@ def summarize(rules: dict[str, Any]) -> RulesSummary:
         referral=len(_as_list(rules.get("referral"))),
         schema_version=str(rules.get("schema_version", SCHEMA_VERSION)),
         last_updated=last_updated if isinstance(last_updated, str) else None,
+        keep=len(_as_list(rules.get("keep"))),
     )
 
 
@@ -356,6 +421,24 @@ def _key_matcher(pattern: str) -> re.Pattern[str]:
     except re.error:
         logger.warning("skipping uncompilable tracker pattern %r", pattern)
         return _NEVER
+
+
+@lru_cache(maxsize=1024)
+def url_regex(pattern: str, flags: int = 0) -> re.Pattern[str] | None:
+    """A provider `exceptions` or `rawRules` pattern, compiled — or None if refused.
+
+    These run against the whole URL, up to MAX_URL_LENGTH characters, so a nested
+    quantifier here freezes the clipboard thread exactly as it would in a key pattern. They
+    get the same refusal, and a refused pattern simply does nothing: an exception that
+    protects nothing, a rawRule that rewrites nothing. `validate` reports it.
+    """
+    if _NESTED_QUANTIFIER.search(pattern):
+        logger.warning("skipping URL pattern %r: nested quantifier (ReDoS risk)", pattern)
+        return None
+    try:
+        return re.compile(pattern, flags)
+    except re.error:
+        return None
 
 
 def _matches_any(key: str, patterns: tuple[str, ...]) -> bool:
@@ -538,10 +621,11 @@ def _apply_raw_rules(url: str, host: str, rules: dict[str, Any]) -> str:
     for provider in _providers_for(host, rules):
         for rule in provider.get("rawRules", []):
             pattern, replacement = rule.get("pattern"), rule.get("replacement", "")
-            if not pattern:
+            compiled = url_regex(pattern) if isinstance(pattern, str) and pattern else None
+            if compiled is None:
                 continue
             try:
-                candidate = re.sub(pattern, replacement, url)
+                candidate = compiled.sub(str(replacement), url)
             except re.error:
                 continue
             # A rawRule may only ever SHORTEN a URL, and must preserve scheme and
@@ -642,9 +726,15 @@ def _clean_result(
 
     # Strip tracker keys. Kept pairs are re-emitted verbatim.
     patterns = _tracker_patterns(host, rules, strip_referral)
+    keep = {k.lower() for k in _strings(rules.get("keep"))}
     kept: list[str] = []
     for key, raw in _raw_pairs(parts.query):
-        if key and _matches_any(key, patterns) and not _is_ambiguous(raw):
+        if (
+            key
+            and key.lower() not in keep
+            and _matches_any(key, patterns)
+            and not _is_ambiguous(raw)
+        ):
             removed.append(key)
         else:
             kept.append(raw)
@@ -664,9 +754,101 @@ def _is_excepted(url: str, host: str, rules: dict[str, Any], exceptions: list[st
             return True
     for provider in _providers_for(host, rules):
         for pattern in provider.get("exceptions", []):
-            try:
-                if re.search(pattern, url, re.IGNORECASE):
-                    return True
-            except re.error:
-                continue
+            compiled = url_regex(pattern, re.IGNORECASE) if isinstance(pattern, str) else None
+            if compiled is not None and compiled.search(url):
+                return True
     return False
+
+
+# ---------------------------------------------------------------------------------------
+# Links inside text
+# ---------------------------------------------------------------------------------------
+
+#: Don't scan more than this. The hotkey is for a message or a paragraph, not a log file,
+#: and a clipboard this size is not something anyone meant to hand over.
+MAX_TEXT_LENGTH = 1_000_000
+
+#: A candidate link: http(s)://, then anything up to whitespace, a quote, an angle bracket
+#: or a backtick — the characters that end a link in prose, Markdown, HTML and chat.
+_LINK_IN_TEXT = re.compile(r"https?://[^\s<>\"'`\x00-\x1f\x7f]+", re.IGNORECASE)
+
+#: Sentence punctuation that trails a link far more often than it belongs to one. `*` is
+#: here for Markdown bold: `**https://x?utm_source=a**` must keep its asterisks.
+_TRAILING_PUNCTUATION = ".,;:!?*"
+_CLOSERS = {")": "(", "]": "[", "}": "{"}
+
+
+@dataclass(frozen=True)
+class TextCleanResult:
+    """The outcome of cleaning every link inside a block of text."""
+
+    original: str
+    result: str
+    #: One entry per link that actually changed, in the order they appear.
+    links: list[CleanResult] = field(default_factory=list)
+
+    @property
+    def changed(self) -> bool:
+        return self.original != self.result
+
+    @property
+    def params_removed(self) -> list[str]:
+        return [key for link in self.links for key in link.params_removed]
+
+
+def clean_text(
+    text: str,
+    *,
+    rules: dict[str, Any] | None = None,
+    exceptions: list[str] | None = None,
+    strip_referral: bool = False,
+) -> TextCleanResult:
+    """Clean every link inside `text`, and leave every other character exactly as it was.
+
+    Each link goes through the same `clean_result` as a bare one, with every guard intact
+    — a signed link, an excepted domain or a link the engine is unsure of comes back
+    untouched. Only the span of a link that genuinely changed is replaced, so the text
+    around it survives byte for byte: spacing, line endings, Markdown, all of it.
+    """
+    if len(text) > MAX_TEXT_LENGTH:
+        return TextCleanResult(original=text, result=text)
+
+    pieces: list[str] = []
+    links: list[CleanResult] = []
+    cursor = 0
+    for start, end in find_links(text):
+        result = clean_result(
+            text[start:end], rules=rules, exceptions=exceptions, strip_referral=strip_referral
+        )
+        if not result.changed:
+            continue
+        pieces.append(text[cursor:start])
+        pieces.append(result.result)
+        cursor = end
+        links.append(result)
+    pieces.append(text[cursor:])
+    return TextCleanResult(original=text, result="".join(pieces), links=links)
+
+
+def find_links(text: str) -> Iterator[tuple[int, int]]:
+    """(start, end) of every http(s) link in `text`, sentence punctuation trimmed off."""
+    for match in _LINK_IN_TEXT.finditer(text):
+        link = _trim_link(match.group())
+        if link:
+            yield match.start(), match.start() + len(link)
+
+
+def _trim_link(candidate: str) -> str:
+    """Drop what a sentence put after a link, without eating what belongs to it.
+
+    A closing bracket is only trimmed when it has no opener inside the link, so a
+    Wikipedia link like `/wiki/Foo_(bar)` keeps its parenthesis while `(see https://x)`
+    gives its back to the sentence.
+    """
+    while candidate:
+        last = candidate[-1]
+        unbalanced = last in _CLOSERS and candidate.count(last) > candidate.count(_CLOSERS[last])
+        if last not in _TRAILING_PUNCTUATION and not unbalanced:
+            break
+        candidate = candidate[:-1]
+    return candidate

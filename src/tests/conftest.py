@@ -39,6 +39,7 @@ WINDOWS_ONLY = (
     "unit/test_rules_management.py",
     "unit/test_security.py",
     "unit/test_single_instance.py",
+    "unit/test_tray_features.py",
     "unit/test_tray_icon.py",
     "unit/test_undo.py",
 )

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: What nudl removes, and what it deliberately doesn't
+    url: https://github.com/Coreho/nudl/blob/master/docs/RULES.md
+    about: Worth a look first — some things that look like trackers are left alone on purpose.

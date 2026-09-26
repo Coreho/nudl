@@ -1,0 +1,41 @@
+name: nudl broke a link
+description: A link stopped working, or opened the wrong thing, after nudl cleaned it.
+labels: ["rules", "broke-a-link"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the bug nudl cares about most. Thank you.
+
+        Undo (the toast's button, the hotkey again within three seconds, or Tray → Undo last
+        clean) gets you the original back. `%AppData%\nudl\clean.log` has every before/after.
+
+        **Only paste what you're happy to make public.** Replace private values with `XXX`;
+        the parameter names are what matter.
+  - type: textarea
+    id: before
+    attributes:
+      label: The link before nudl
+      placeholder: https://example.com/page?important=XXX&utm_source=newsletter
+    validations:
+      required: true
+  - type: textarea
+    id: after
+    attributes:
+      label: The link after nudl
+      placeholder: https://example.com/page?utm_source=newsletter
+    validations:
+      required: true
+  - type: textarea
+    id: broken
+    attributes:
+      label: What went wrong?
+      placeholder: The page asks me to log in again / shows a different product / 404
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: nudl version
+      description: Tray → About, `nudl --version`, or the bottom of the web page.
+      placeholder: "0.2.0"

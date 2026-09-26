@@ -23,6 +23,7 @@ class FakeClipboard:
 
     ClipboardBusy = app_module.clipboard.ClipboardBusy
     ClipboardChanged = app_module.clipboard.ClipboardChanged
+    Snapshot = app_module.clipboard.Snapshot
     # Mirror the real constant (0x031D). A double that quietly disagrees with the thing it
     # doubles is a trap primed for whoever first drives `_pump()` through this fake.
     WM_CLIPBOARDUPDATE = app_module.clipboard.WM_CLIPBOARDUPDATE
@@ -38,17 +39,32 @@ class FakeClipboard:
             raise self.ClipboardBusy("locked")
         return self.text
 
-    def set_text(self, text: str, expect_sequence: int | None = None) -> int:
+    def set_text(
+        self, text: str, expect_sequence: int | None = None, html: bytes | None = None
+    ) -> int:
         if self.busy or self.busy_on_write:
             raise self.ClipboardBusy("locked")
         if expect_sequence is not None and expect_sequence != self.sequence:
             raise self.ClipboardChanged("the clipboard changed under us")
         self.text = text
+        self.html = html
         self.sequence += 1
         return self.sequence
 
     def get_text_and_sequence(self) -> tuple[str | None, int]:
         return self.get_text(), self.sequence
+
+    def read_snapshot(self, *, want_html: bool = False) -> Snapshot:
+        return self.Snapshot(
+            text=self.get_text(),
+            sequence=self.sequence,
+            html=self.html if want_html else None,
+        )
+
+    def source_app(self) -> str | None:
+        return None
+
+    html: bytes | None = None
 
     def copy_as_the_user(self, text: str) -> None:
         """What happens when a human presses Ctrl+C: new text, and the sequence moves."""

@@ -213,16 +213,29 @@ def test_a_long_reason_is_truncated_for_the_toast(build, rules_file) -> None:
 # -- Rules… --------------------------------------------------------------------------
 
 
-def test_open_rules_seeds_the_file_from_the_bundled_set(build, rules_file, monkeypatch) -> None:
-    """A first-time user gets the commented bundled file, not a blank one to invent from."""
+def test_open_rules_creates_a_file_for_additions_not_a_copy(
+    build, rules_file, monkeypatch
+) -> None:
+    """A first-time user gets a commented template for what they want ON TOP.
+
+    Not a copy of the bundled set: a copy was all nudl ran on from then on, so every
+    tracker added in a later release silently passed that user by.
+    """
     instance, _ = build()
     opened: list = []
     monkeypatch.setattr(instance, "_open", opened.append)
 
     instance._open_rules()
 
-    assert rules_file.read_bytes() == clean.BUNDLED_RULES_PATH.read_bytes()
     assert opened == [rules_file]
+    template = json.loads(rules_file.read_text(encoding="utf-8"))
+    assert template["global_tracker_keys"] == [] and template["keep"] == []
+    assert "ADDED" in " ".join(template["$comment"])
+    loaded = clean.load_rules_verbose(rules_file)
+    assert loaded.error is None, "the template nudl writes does not load"
+    assert clean.summarize(loaded.rules) == clean.summarize(clean.load_rules()), (
+        "an untouched template changed what nudl strips"
+    )
 
 
 def test_open_rules_never_clobbers_what_is_already_there(build, rules_file, monkeypatch) -> None:
@@ -249,9 +262,11 @@ def test_validate_adopts_the_edited_file_and_reports_the_counts(build, rules_fil
 
     instance._validate_rules()
 
-    assert instance.rules["global_tracker_keys"] == ["my_tracker", "other_tracker"]
+    assert {"my_tracker", "other_tracker", "fbclid"} <= set(instance.rules["global_tracker_keys"])
     assert instance._rules_load.source == "custom"
-    assert said[-1] == "nudl — rules reloaded: 2 global keys, 0 providers, 0 wrappers"
+    assert said[-1] == (
+        "nudl — your rules reloaded: +2 keys, +0 sites, 0 kept. The bundled rules still apply."
+    )
     assert config_module.rules_backup_path(instance.config).read_bytes() == rules_file.read_bytes()
 
 
@@ -290,15 +305,17 @@ def test_about_shows_when_the_live_rules_were_updated(build, rules_file) -> None
 
     instance._show_about()
 
+    # The BUNDLED rules' date: they are always live now, under whatever the user added.
+    bundled = clean.summarize(clean.load_rules()).last_updated
     assert said[-1] == (
-        "nudl — local only. Your links never leave this machine. Rules updated 2026-08-01."
+        f"nudl — local only. Your links never leave this machine. Rules updated {bundled}."
     )
 
 
-def test_about_omits_the_date_when_the_rules_carry_none(build, rules_file) -> None:
-    _write(rules_file, {k: v for k, v in CUSTOM.items() if k != "last_updated"})
+def test_about_counts_what_nudl_has_removed(build, rules_file) -> None:
     instance, said = build()
+    instance.counter.add(5, 3)
 
     instance._show_about()
 
-    assert said[-1] == "nudl — local only. Your links never leave this machine."
+    assert "5 trackers removed from 3 links since " in said[-1]

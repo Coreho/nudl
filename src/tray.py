@@ -65,8 +65,10 @@ class Tray:
         open_rules: Callable[[], None],
         validate_rules: Callable[[], None],
         open_log: Callable[[], None],
+        report_link: Callable[[], None],
         show_about: Callable[[], None],
         on_exit: Callable[[], None],
+        title: str = "nudl — clean links",
     ) -> None:
         self._get_mode = get_mode
         self._set_mode = set_mode
@@ -75,7 +77,7 @@ class Tray:
         self.icon = pystray.Icon(
             "nudl",
             icon=_tray_icon(),
-            title="nudl — clean links",
+            title=title,
             menu=pystray.Menu(
                 # The toast lasts seconds and the hotkey window is shorter still. Miss
                 # both and the original was gone — even though nudl still had it. Here it
@@ -121,11 +123,20 @@ class Tray:
                 pystray.MenuItem("Rules…", lambda: open_rules()),
                 pystray.MenuItem("Validate rules", lambda: validate_rules()),
                 pystray.MenuItem("View log", lambda: open_log()),
+                pystray.Menu.SEPARATOR,
+                # How the rules get better: a user who hits a link nudl got wrong is one
+                # click from telling someone. It opens a form in the browser; the link
+                # itself goes nowhere unless the user pastes it in.
+                pystray.MenuItem("Report a link nudl got wrong…", lambda: report_link()),
                 pystray.MenuItem("About", lambda: show_about()),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Exit", self._exit),
             ),
         )
+
+    def set_title(self, title: str) -> None:
+        """The tooltip — "nudl — 412 trackers removed from 230 links". Any thread."""
+        self.icon.title = title
 
     def _exit(self) -> None:
         self._on_exit()

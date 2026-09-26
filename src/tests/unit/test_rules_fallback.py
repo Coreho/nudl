@@ -49,18 +49,63 @@ def test_a_rule_set_with_a_WRONG_TYPED_key_is_rejected(tmp_path: Path) -> None:
     assert clean.clean("https://e.com/a?utm_source=x&id=1", rules=rules) == "https://e.com/a?id=1"
 
 
-def test_a_valid_partial_rule_set_is_accepted(tmp_path: Path) -> None:
-    """A user trimming the rules down to just what they want is legitimate."""
+def test_a_small_user_file_adds_to_the_bundled_rules_rather_than_replacing_them(
+    tmp_path: Path,
+) -> None:
+    """The file holds only what the user wants on top. Every bundled rule still applies.
+
+    It used to replace the bundled set outright, so a user who once added one key was
+    frozen on that version's rules forever — later releases' trackers passed them by.
+    """
     mine = tmp_path / "rules.json"
-    mine.write_text(json.dumps({"global_tracker_keys": ["fbclid"]}), encoding="utf-8")
+    mine.write_text(json.dumps({"global_tracker_keys": ["my_tracker"]}), encoding="utf-8")
 
     rules = clean.load_rules(mine)
 
-    assert clean.clean("https://e.com/a?fbclid=x&id=1", rules=rules) == "https://e.com/a?id=1"
-    # utm_source is NOT in their list, so it survives. Their file, their rules.
+    assert clean.clean("https://e.com/a?my_tracker=x&id=1", rules=rules) == "https://e.com/a?id=1"
+    assert clean.clean("https://e.com/a?utm_source=x", rules=rules) == "https://e.com/a"
+
+
+def test_keep_switches_a_bundled_rule_off_even_inside_a_regex(tmp_path: Path) -> None:
+    """`keep` is how a user overrides the bundled set — and it beats `^utm_.*$`."""
+    mine = tmp_path / "rules.json"
+    mine.write_text(json.dumps({"keep": ["utm_campaign", "FBCLID"]}), encoding="utf-8")
+
+    rules = clean.load_rules(mine)
+
     assert (
-        clean.clean("https://e.com/a?utm_source=x", rules=rules) == "https://e.com/a?utm_source=x"
+        clean.clean("https://e.com/a?utm_source=x&utm_campaign=y&fbclid=z", rules=rules)
+        == "https://e.com/a?utm_campaign=y&fbclid=z"
     )
+
+
+def test_a_user_provider_with_a_bundled_name_extends_it(tmp_path: Path) -> None:
+    mine = tmp_path / "rules.json"
+    mine.write_text(
+        json.dumps({"providers": [{"name": "youtube", "rules": ["ab_channel"]}]}),
+        encoding="utf-8",
+    )
+
+    rules = clean.load_rules(mine)
+
+    youtube = [p for p in rules["providers"] if p["name"] == "youtube"]
+    assert len(youtube) == 1, "the provider was duplicated instead of extended"
+    assert (
+        clean.clean("https://www.youtube.com/watch?v=a&ab_channel=b&si=c", rules=rules)
+        == "https://www.youtube.com/watch?v=a"
+    )
+
+
+def test_junk_entries_in_a_user_file_are_dropped_not_fatal(tmp_path: Path) -> None:
+    """One dict in a list of patterns must not make every clean fail."""
+    mine = tmp_path / "rules.json"
+    mine.write_text(
+        json.dumps({"global_tracker_keys": [{"oops": 1}, 7, "my_tracker"]}), encoding="utf-8"
+    )
+
+    rules = clean.load_rules(mine)
+
+    assert clean.clean("https://e.com/a?my_tracker=x&fbclid=y", rules=rules) == "https://e.com/a"
 
 
 def test_emergency_rules_still_clean_the_obvious_offenders() -> None:

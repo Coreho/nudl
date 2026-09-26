@@ -19,10 +19,10 @@ tell nudl ran at all.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import re
-import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -36,7 +36,7 @@ import win32event
 import win32security
 import winerror
 
-from . import autostart, clean, clipboard, config, hotkey
+from . import autostart, clean, clipboard, config, hotkey, html_clip, settings_ui, stats
 from .hidden_window import MessageWindow
 from .toast import OverlayUI
 from .tray import Tray
@@ -44,6 +44,41 @@ from .tray import Tray
 logger = logging.getLogger(__name__)
 
 HOTKEY_ID = 1
+
+#: Posted to the pump by the Settings window: RegisterHotKey belongs to the pump thread, so
+#: a new shortcut has to be registered there, not on the UI thread that asked for it.
+WM_REBIND_HOTKEY = win32con.WM_APP + 1
+
+#: Where "Report a link nudl got wrong…" goes. The link itself is NOT passed along: the
+#: user pastes it into the form, if they choose to, and sees exactly what they send.
+ISSUES_URL = "https://github.com/Coreho/nudl/issues/new/choose"
+
+#: What Rules… creates the first time: a file for ADDITIONS, layered on the bundled set.
+#: It used to be a full copy of the bundled rules, and from then on that copy was all nudl
+#: ran on — every tracker added in a later release silently passed that user by.
+RULES_TEMPLATE: dict[str, object] = {
+    "$comment": [
+        "Your rules. They are ADDED to nudl's bundled rules, which keep improving with every",
+        "release — so this file only needs what you want on top.",
+        "",
+        "global_tracker_keys  keys to strip on every site:",
+        "                       'my_tracker' exact key, '^mc_.*$' regex, 'pd_rd_*' prefix",
+        "keep                 exact keys nudl must NEVER strip, even if a bundled rule says so",
+        "providers            rules for one site. One named like a bundled provider",
+        "                     ('youtube', 'amazon') extends it; a new name adds a site:",
+        "                     {'name': 'example', 'urlPattern': '(^|\\.)example\\.com$',",
+        "                      'rules': ['ref']}",
+        "",
+        "Everything nudl strips, and everything it deliberately leaves alone:",
+        "https://github.com/Coreho/nudl/blob/master/docs/RULES.md",
+        "",
+        "Check your edits with Tray > Validate rules.",
+    ],
+    "schema_version": clean.SCHEMA_VERSION,
+    "global_tracker_keys": [],
+    "keep": [],
+    "providers": [],
+}
 
 #: Only one nudl may run per user session. A second instance would put a second icon in
 #: the tray, fail to claim the (already-held) hotkey, and — once auto-watch lands —
@@ -231,6 +266,11 @@ class LastClean:
     original: str
     cleaned: str
     at: float
+    #: The formatted copy as it was, so undo puts back the formatting too — not just text.
+    original_html: bytes | None = None
+    #: What this clean added to the running count, so undo can take exactly that back.
+    trackers: int = 0
+    links: int = 0
 
 
 class NudlApp:
@@ -250,6 +290,9 @@ class NudlApp:
         self._lock = threading.Lock()
         self._last_clean: LastClean | None = None
         self._own_write = clipboard.OwnWriteGuard()
+        self._registered_hotkey: str | None = None
+        self.counter = stats.Counter()
+        self.tray: Tray | None = None
 
         # Clipboard writes come from two threads: the pump (a clean) and the Tk thread
         # (the toast's Undo button). arm -> write -> confirm must be atomic as a unit, or
@@ -275,7 +318,7 @@ class NudlApp:
         pump = threading.Thread(target=self._pump, name="nudl-pump", daemon=True)
         pump.start()
 
-        tray = Tray(
+        self.tray = Tray(
             get_mode=lambda: self.config["mode"],
             set_mode=self._set_mode,
             get_run_at_startup=lambda: self.config["run_at_startup"],
@@ -286,10 +329,12 @@ class NudlApp:
             open_rules=self._open_rules,
             validate_rules=self._validate_rules,
             open_log=self._open_log,
+            report_link=self._report_link,
             show_about=self._show_about,
             on_exit=self._shutdown,
+            title=self._tooltip(),
         )
-        tray.run()  # blocks the main thread until Exit
+        self.tray.run()  # blocks the main thread until Exit
 
     def _first_run(self) -> None:
         """Ask once, remember forever (FR-010)."""
@@ -317,9 +362,11 @@ class NudlApp:
             # the hwnd is already dead and unregistering against it is unregistering
             # against nothing. WM_CLOSE is the last moment the window still exists.
             self.window.on(win32con.WM_CLOSE, lambda _w, _l: self._release_window())
+            self.window.on(WM_REBIND_HOTKEY, lambda _w, _l: self._rebind_hotkey())
 
             try:
                 hotkey.register(self.window.hwnd, HOTKEY_ID, self.config["hotkey"])
+                self._registered_hotkey = self.config["hotkey"]
             except (hotkey.InvalidHotkey, hotkey.HotkeyUnavailable) as exc:
                 # Losing the hotkey is survivable — the tray still works — but the user
                 # has to be told, or nudl looks silently broken.
@@ -448,21 +495,20 @@ class NudlApp:
         self.ui.show_toast(message, seconds=10)
 
     def _open_rules(self) -> None:
-        """Open the live rules file, seeding it from the bundled set when it is absent.
+        """Open the user's rules file, creating it from RULES_TEMPLATE when it is absent.
 
-        Seeded rather than created empty, and that matters: the bundled file is heavily
-        commented and lists every param nudl deliberately leaves alone, so a user who
-        opens it can see both what a rule looks like and why some obvious-looking
-        tracking keys are not stripped. A blank file invites reinventing all of that,
-        badly, and breaking links in the process.
+        Not a copy of the bundled set, and not an empty file. The file holds ADDITIONS, so a
+        copy would only duplicate rules that keep updating anyway; and a blank file teaches
+        nothing. The template says what each list does, shows the syntax, and points at the
+        full list of what nudl strips and deliberately leaves alone.
         """
         path = config.rules_path(self.config)
         if not path.exists():
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(clean.BUNDLED_RULES_PATH, path)
+                path.write_text(json.dumps(RULES_TEMPLATE, indent=2) + "\n", encoding="utf-8")
             except OSError:
-                logger.exception("could not seed %s from the bundled rules", path)
+                logger.exception("could not create %s", path)
                 self.ui.show_toast(
                     f"nudl — could not create {path.name}. Check the log.", seconds=6
                 )
@@ -510,9 +556,13 @@ class NudlApp:
         self._rules_load = load
         self.rules = load.rules
         self._back_up_rules()
-        summary = clean.summarize(load.rules)
-        logger.info("validate: adopted %s (%s)", load.path, summary.describe())
-        self.ui.show_toast(f"nudl — rules reloaded: {summary.describe()}", seconds=6)
+        mine = clean.summarize(load.own or {})
+        logger.info("validate: adopted %s (%s)", load.path, clean.summarize(load.rules).describe())
+        self.ui.show_toast(
+            f"nudl — your rules reloaded: +{mine.global_keys} keys, "
+            f"+{mine.providers} sites, {mine.keep} kept. The bundled rules still apply.",
+            seconds=6,
+        )
 
     # -- auto-watch ----------------------------------------------------------------
 
@@ -522,21 +572,34 @@ class NudlApp:
             logger.debug("clipboard changed, but mode is %r", self.config["mode"])
             return
 
+        # Checked before a byte is read: "leave copies from this app alone" should mean
+        # nudl never looked, not that it looked and then decided not to act.
+        skip = {name.lower().removesuffix(".exe") for name in self.config["skip_apps"]}
+        if skip:
+            source = clipboard.source_app()
+            if source and source.lower().removesuffix(".exe") in skip:
+                logger.debug("clipboard update from %s, which the user skips", source)
+                return
+
         try:
-            # Read both under one clipboard lock. Fetching them separately leaves a
+            # Read everything under one clipboard lock. Fetching separately leaves a
             # window for another process to change the clipboard in between, which would
             # pair a stale sequence number with fresh text.
-            text, sequence = clipboard.get_text_and_sequence()
+            snapshot = clipboard.read_snapshot()
         except clipboard.ClipboardBusy:
             logger.warning("clipboard update: locked by another process, skipping")
             return
 
-        # The echo of our own write. Ignoring this is what stops the infinite loop.
-        if self._own_write.is_own_write(sequence, text):
-            logger.debug("clipboard update seq=%s was our own write; ignoring", sequence)
+        if snapshot.private:
+            logger.debug("clipboard update marked private by the app that copied it")
             return
 
-        url = clipboard.as_single_url(text)
+        # The echo of our own write. Ignoring this is what stops the infinite loop.
+        if self._own_write.is_own_write(snapshot.sequence, snapshot.text):
+            logger.debug("clipboard update seq=%s was our own write; ignoring", snapshot.sequence)
+            return
+
+        url = clipboard.as_single_url(snapshot.text)
         if url is None:
             logger.debug("clipboard update: not a single URL; leaving it alone")
             return  # a paragraph, a file, an image, plain text — never touched
@@ -554,7 +617,7 @@ class NudlApp:
             return
 
         try:
-            text = clipboard.get_text()
+            snapshot = clipboard.read_snapshot(want_html=True)
         except clipboard.ClipboardBusy:
             # The user pressed the hotkey and something has to happen. Silence here reads
             # as "nudl is broken".
@@ -562,40 +625,87 @@ class NudlApp:
             self.ui.show_toast("nudl — clipboard busy, try again", seconds=3)
             return
 
-        url = clipboard.as_single_url(text)
-        if url is None:
-            logger.info("hotkey: clipboard holds no single URL")
-            self.ui.show_toast("nudl — no link on the clipboard", seconds=3)
+        if snapshot.private:
+            # Explicit as the hotkey is, the app that copied this asked tools to stay out,
+            # and a password manager is exactly the app that would. Say why nothing happened.
+            logger.info("hotkey: clipboard marked private by the app that copied it")
+            self.ui.show_toast("nudl — the app you copied from marked it private", seconds=3)
             return
 
-        self.apply_clean(url)
+        # The hotkey is an explicit request, so it cleans every link in whatever was
+        # copied — a whole message, a paragraph of a doc — not only a bare link. Automatic
+        # mode keeps the bare-link gate: it acts without being asked.
+        in_text = bool(snapshot.text) and any(clean.find_links(snapshot.text or ""))
+        in_html = snapshot.html is not None and b"://" in snapshot.html
+        if not in_text and not in_html:
+            logger.info("hotkey: no link on the clipboard")
+            self.ui.show_toast("nudl — no link on the clipboard", seconds=3)
+            return
+        self.apply_clean(snapshot.text or "", snapshot.html)
 
-    def apply_clean(self, url: str) -> None:
-        """Clean `url` and, only if that changed something, write it back loudly."""
-        result = clean.clean_result(
-            url,
-            rules=self.rules,
-            exceptions=self.config["exceptions"],
-            strip_referral=self.config["strip_referral"],
-        )
-        if not result.changed:
+    def _options(self) -> dict[str, object]:
+        return {
+            "rules": self.rules,
+            "exceptions": self.config["exceptions"],
+            "strip_referral": self.config["strip_referral"],
+        }
+
+    def apply_clean(self, text: str, html: bytes | None = None) -> None:
+        """Clean every link in `text` (and in `html`), and write back only if that changed.
+
+        `html` is the clipboard's formatted copy. Its links are cleaned too — including the
+        ones hiding in an href behind link text, which the plain text never shows — and it
+        goes back on the clipboard beside the text, so the paste keeps its formatting. If
+        it cannot be rebuilt exactly, the text is written alone rather than risk a garbled
+        paste.
+        """
+        options = self._options()
+        text_result = clean.clean_text(text, **options)  # type: ignore[arg-type]
+        links = {link.original: link for link in text_result.links}
+
+        new_html = None
+        if html is not None:
+            rebuilt = html_clip.clean_html_format(
+                html, lambda url: clean.clean_result(url, **options)  # type: ignore[arg-type]
+            )
+            if rebuilt is None:
+                logger.info("formatted copy could not be rebuilt; writing plain text only")
+            else:
+                new_html, html_links = rebuilt
+                for link in html_links:
+                    links.setdefault(link.original, link)
+
+        if not text_result.changed and (new_html is None or new_html == html):
             # A no-op is silent: no toast, no clipboard write. But it is NOT invisible to
             # the debug log — "nudl stopped working" and "nudl decided there was nothing
             # to do" look identical from the outside, and this is how you tell them apart.
-            logger.info("no change (%s)", result.reason_noop or "nothing to strip")
+            logger.info("no change (%s)", "nothing to strip")
             return
 
-        if not self._write_clipboard(result.result):
+        if not self._write_clipboard(text_result.result, html=new_html):
             self.ui.show_toast("nudl — clipboard busy, link left alone", seconds=3)
             return
 
+        removed = [key for link in links.values() for key in link.params_removed]
         with self._lock:
-            self._last_clean = LastClean(result.original, result.result, time.monotonic())
+            self._last_clean = LastClean(
+                text,
+                text_result.result,
+                time.monotonic(),
+                original_html=html if new_html is not None else None,
+                trackers=len(removed),
+                links=len(links),
+            )
 
-        self._log(result)
-        self.ui.show_toast(self._describe(result), on_undo=self.undo)
+        for link in links.values():
+            self._log(link)
+        self.counter.add(len(removed), len(links))
+        self._update_tooltip()
+        self.ui.show_toast(self._describe(len(removed), len(links)), on_undo=self.undo)
 
-    def _write_clipboard(self, text: str, expect_sequence: int | None = None) -> bool:
+    def _write_clipboard(
+        self, text: str, expect_sequence: int | None = None, html: bytes | None = None
+    ) -> bool:
         """The ONLY way nudl writes the clipboard. Always through the own-write guard.
 
         Arm before the write, confirm after: a clipboard write nudl doesn't recognise as
@@ -613,7 +723,7 @@ class NudlApp:
         with self._write_lock:
             token = self._own_write.arm(text)
             try:
-                seq = clipboard.set_text(text, expect_sequence=expect_sequence)
+                seq = clipboard.set_text(text, expect_sequence=expect_sequence, html=html)
                 self._own_write.confirm(token, seq)
             except Exception:  # noqa: BLE001 — busy clipboard, changed clipboard, any win32 failure
                 logger.warning("could not write the clipboard", exc_info=True)
@@ -622,12 +732,12 @@ class NudlApp:
         return True
 
     @staticmethod
-    def _describe(result: clean.CleanResult) -> str:
-        count = len(result.params_removed)
-        if count == 1:
-            return "nudl — removed 1 tracker"
-        if count > 1:
-            return f"nudl — removed {count} trackers"
+    def _describe(trackers: int, links: int = 1) -> str:
+        where = f" from {links} links" if links > 1 else ""
+        if trackers == 1:
+            return f"nudl — removed 1 tracker{where}"
+        if trackers > 1:
+            return f"nudl — removed {trackers} trackers{where}"
         return "nudl — unwrapped the redirect"  # changed, but nothing was stripped
 
     # -- undo ----------------------------------------------------------------------
@@ -705,7 +815,9 @@ class NudlApp:
         # `sequence` closes the gap between the check above and the write below: if the
         # user copies something in that window, the write is refused rather than
         # destroying what they just copied.
-        if not self._write_clipboard(last.original, expect_sequence=sequence):
+        if not self._write_clipboard(
+            last.original, expect_sequence=sequence, html=last.original_html
+        ):
             # Put the undo back. A busy clipboard is transient, and discarding the
             # original here would mean telling the user "could not undo" and then never
             # letting them try again — losing the very thing undo exists to protect. If
@@ -718,6 +830,8 @@ class NudlApp:
             return False
 
         logger.info("undo: restored the original link")
+        self.counter.take_back(last.trackers, last.links)
+        self._update_tooltip()
         self.ui.show_toast("nudl — undone", seconds=2)
         return True
 
@@ -747,6 +861,74 @@ class NudlApp:
         config.save(self.config)
 
     def _open_settings(self) -> None:
+        self.ui.show_settings(
+            settings_ui.SettingsForm.from_config(self.config),
+            on_save=self._save_settings,
+            on_rules=self._open_rules,
+            on_config_file=self._open_config_file,
+        )
+
+    def _save_settings(self, form: settings_ui.SettingsForm) -> str | None:
+        """Apply what the Settings window says. Returns a problem to show, or None.
+
+        Runs on the UI thread. Start with Windows goes first because it is the one change
+        that can fail outside nudl's control, and nothing should be saved on the strength
+        of a registry write that did not happen.
+        """
+        updates, problem = settings_ui.parse_form(form)
+        if problem:
+            return problem
+        if updates["run_at_startup"] != self.config["run_at_startup"]:
+            try:
+                if updates["run_at_startup"]:
+                    autostart.enable()
+                else:
+                    autostart.disable()
+            except OSError:
+                logger.exception("settings: could not change autostart")
+                return "Windows refused to change Start with Windows. Nothing was saved."
+
+        rebind = updates["hotkey"] != self.config["hotkey"]
+        self.config.update(updates)
+        config.save(self.config)
+        if rebind:
+            self._request_rebind()
+        return None
+
+    def _request_rebind(self) -> None:
+        window = self.window
+        if window is not None and window.hwnd:
+            win32api.PostMessage(window.hwnd, WM_REBIND_HOTKEY, 0, 0)
+
+    def _rebind_hotkey(self) -> None:
+        """Swap the registered shortcut for the configured one. Pump thread only.
+
+        If Windows refuses the new one — another app already owns it — the old one is put
+        back and the setting with it, so the Settings window never claims a shortcut that
+        does not work.
+        """
+        window = self.window
+        wanted = self.config["hotkey"]
+        if window is None or not window.hwnd or wanted == self._registered_hotkey:
+            return
+        previous = self._registered_hotkey
+        hotkey.unregister(window.hwnd, HOTKEY_ID)
+        try:
+            hotkey.register(window.hwnd, HOTKEY_ID, wanted)
+        except (hotkey.InvalidHotkey, hotkey.HotkeyUnavailable) as exc:
+            logger.warning("rebind to %s failed: %s", wanted, exc)
+            if previous is not None:
+                with contextlib.suppress(hotkey.InvalidHotkey, hotkey.HotkeyUnavailable):
+                    hotkey.register(window.hwnd, HOTKEY_ID, previous)
+                self.config["hotkey"] = previous
+                config.save(self.config)
+            kept = f" Kept {previous}." if previous else ""
+            self.ui.show_toast(f"nudl — {exc}.{kept}", seconds=8)
+            return
+        self._registered_hotkey = wanted
+        self.ui.show_toast(f"nudl — shortcut is now {wanted}", seconds=3)
+
+    def _open_config_file(self) -> None:
         path = config.config_path()
         if not path.exists():
             config.save(self.config)
@@ -761,12 +943,46 @@ class NudlApp:
 
     def _show_about(self) -> None:
         message = "nudl — local only. Your links never leave this machine."
+        counted = self.counter.stats
+        if counted.links:
+            message += f" {counted.describe().capitalize()}"
+            message += f" since {counted.since}." if counted.since else "."
         # Rule freshness is the one thing about nudl a user cannot infer from watching it
         # work: a stale rule set strips fewer trackers and looks exactly like a current one.
         last_updated = clean.summarize(self.rules).last_updated
         if last_updated:
             message += f" Rules updated {last_updated}."
-        self.ui.show_toast(message, seconds=6)
+        self.ui.show_toast(message, seconds=8)
+
+    def _tooltip(self) -> str:
+        counted = self.counter.stats
+        return f"nudl — {counted.describe()}" if counted.links else "nudl — clean links"
+
+    def _update_tooltip(self) -> None:
+        if self.tray is not None:
+            self.tray.set_title(self._tooltip())
+
+    def _report_link(self) -> None:
+        """Open the issue chooser in the browser. nudl sends nothing; the user decides.
+
+        The link that prompted the report is deliberately NOT put in the URL. Pre-filling
+        it would hand it to GitHub the moment the page loads, before the user has read
+        what they are about to share — and a copied link can be private. They paste it
+        into the form themselves, or a redacted version, or nothing.
+        """
+        self._open_url(ISSUES_URL)
+
+    @staticmethod
+    def _open_url(url: str) -> None:
+        # The browser, for nudl's own issue tracker and nothing else: `os.startfile` on an
+        # arbitrary string is an arbitrary program launch.
+        if not url.startswith("https://github.com/Coreho/nudl/"):
+            logger.warning("refusing to open %s", url)
+            return
+        try:
+            os.startfile(url)  # noqa: S606 — the user asked to open the issue tracker
+        except OSError:
+            logger.exception("could not open %s", url)
 
     @staticmethod
     def _open(path: Path) -> None:

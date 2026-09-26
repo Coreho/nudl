@@ -1,4 +1,4 @@
-"""User configuration — `%AppData%\\nudl\\config.json`.
+"""User configuration — `%AppData%\\nudl\\config.json` (`~/.config/nudl/` off Windows).
 
 A corrupt or hand-mangled config must never stop nudl from running: unknown keys are
 ignored, wrong-typed values fall back to their default, and an unreadable file yields
@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +26,25 @@ DEFAULTS: dict[str, Any] = {
     "strip_referral": False,  # off-by-default referral-param toggle
     "rules_path": "rules.json",
     "first_run_complete": False,  # the mode dialog is shown exactly once (FR-010)
+    # Apps whose copies automatic mode leaves alone, by exe name ("Code.exe"). The hotkey
+    # ignores this: pressing it is asking, whatever app the link came from.
+    "skip_apps": [],
 }
 
 MODES = ("hotkey", "auto")
 
 
 def config_dir() -> Path:
-    base = os.environ.get("APPDATA")
-    return (Path(base) if base else Path.home() / "AppData" / "Roaming") / APP_NAME
+    """%AppData%\\nudl on Windows; $XDG_CONFIG_HOME/nudl (~/.config/nudl) elsewhere.
+
+    Off Windows only the command line runs, but it reads the same config and the same
+    rules file as the tray, so a rule added once applies wherever nudl is used.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Roaming") / APP_NAME
+    base = os.environ.get("XDG_CONFIG_HOME")
+    return (Path(base) if base else Path.home() / ".config") / APP_NAME
 
 
 def config_path() -> Path:
@@ -41,6 +53,10 @@ def config_path() -> Path:
 
 def log_path() -> Path:
     return config_dir() / "clean.log"
+
+
+def stats_path() -> Path:
+    return config_dir() / "stats.json"
 
 
 def rules_path(cfg: dict[str, Any] | None = None) -> Path:
@@ -90,6 +106,7 @@ def load(path: str | Path | None = None) -> dict[str, Any]:
     if cfg["mode"] not in MODES:
         cfg["mode"] = DEFAULTS["mode"]
     cfg["exceptions"] = [str(d) for d in cfg["exceptions"] if isinstance(d, str) and d.strip()]
+    cfg["skip_apps"] = [str(a) for a in cfg["skip_apps"] if isinstance(a, str) and a.strip()]
     return cfg
 
 

@@ -146,15 +146,28 @@ def test_a_clean_link_is_left_completely_alone(nudl: NudlApp) -> None:
     assert after == before, "nudl rewrote the clipboard with an identical value"
 
 
-def test_a_paragraph_is_never_touched(nudl: NudlApp) -> None:
-    prose = "Look at https://example.com/?utm_source=x when you get a chance"
+def test_the_hotkey_cleans_the_link_inside_a_paragraph_and_nothing_else(nudl: NudlApp) -> None:
+    """Pressing the hotkey is asking, so a whole copied message gets its links cleaned —
+    and every other character of it comes back exactly as it was."""
+    prose = "Look at https://example.com/?utm_source=x when you get a chance.\r\n  Thanks!"
+    clipboard.set_text(prose)
+
+    nudl.on_hotkey()
+
+    assert clipboard.get_text() == (
+        "Look at https://example.com/ when you get a chance.\r\n  Thanks!"
+    )
+
+
+def test_the_hotkey_leaves_a_paragraph_with_nothing_to_clean_alone(nudl: NudlApp) -> None:
+    prose = "Look at https://example.com/?id=2 when you get a chance"
     clipboard.set_text(prose)
     _, before = clipboard.get_text_and_sequence()
 
     nudl.on_hotkey()
 
     assert clipboard.get_text() == prose
-    assert clipboard.get_text_and_sequence()[1] == before
+    assert clipboard.get_text_and_sequence()[1] == before, "rewrote a clipboard it didn't change"
 
 
 # -- auto-watch: the real listener, the real loop ------------------------------------

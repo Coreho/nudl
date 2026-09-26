@@ -1,4 +1,4 @@
-"""Overlay UI: the toast (with Undo) and the one-time first-run mode picker.
+"""Overlay UI: the toast (with Undo), the one-time first-run picker, and Settings.
 
 **Why not a native Windows toast?** Because Focus Assist / Do-Not-Disturb silently
 suppresses them. A suppressed toast would take the Undo affordance down with it, and
@@ -20,6 +20,8 @@ import queue
 import threading
 import tkinter as tk
 from collections.abc import Callable
+
+from . import settings_ui
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class OverlayUI:
         self._ready = threading.Event()
         self._root: tk.Tk | None = None
         self._toast: tk.Toplevel | None = None
+        self._settings: tk.Toplevel | None = None
         self._thread: threading.Thread | None = None
 
     # -- lifecycle ---------------------------------------------------------------
@@ -205,6 +208,29 @@ class OverlayUI:
             str(chosen.get("mode", default)),
             bool(chosen.get("start_with_windows", start_with_windows)),
         )
+
+    # -- settings ------------------------------------------------------------------
+
+    def show_settings(
+        self,
+        form: settings_ui.SettingsForm,
+        on_save: Callable[[settings_ui.SettingsForm], str | None],
+        on_rules: Callable[[], None],
+        on_config_file: Callable[[], None],
+    ) -> None:
+        """Open the Settings window — or bring the one already open to the front."""
+
+        def build() -> None:
+            assert self._root is not None
+            existing = self._settings
+            if existing is not None and existing.winfo_exists():
+                existing.deiconify()
+                existing.lift()
+                existing.focus_force()
+                return
+            self._settings = settings_ui.build(self._root, form, on_save, on_rules, on_config_file)
+
+        self._post(build)
 
     def _build_mode_dialog(
         self,

@@ -54,7 +54,7 @@ def test_a_file_with_no_schema_version_is_accepted(tmp_path: Path) -> None:
 
     assert load.source == "custom"
     assert load.error is None
-    assert load.rules["global_tracker_keys"] == ["mine_only_tracker"]
+    assert load.own["global_tracker_keys"] == ["mine_only_tracker"]
 
 
 def test_the_current_schema_version_is_accepted(tmp_path: Path) -> None:
@@ -149,7 +149,7 @@ def test_a_broken_file_with_a_good_backup_runs_on_the_backup(tmp_path: Path) -> 
 
     assert load.source == "backup"
     assert load.path == backup
-    assert load.rules["global_tracker_keys"] == ["backup_only_tracker"]
+    assert load.own["global_tracker_keys"] == ["backup_only_tracker"]
     assert "is not valid JSON" in (load.error or "")
 
 
@@ -185,7 +185,7 @@ def test_a_working_file_beats_its_backup(tmp_path: Path) -> None:
     load = clean.load_rules_verbose(primary, backup=backup)
 
     assert load.source == "custom"
-    assert load.rules["global_tracker_keys"] == ["mine_only_tracker"]
+    assert load.own["global_tracker_keys"] == ["mine_only_tracker"]
 
 
 def test_the_distinct_failures_are_distinguishable(tmp_path: Path) -> None:
@@ -214,7 +214,8 @@ def test_load_rules_still_returns_a_plain_dict(tmp_path: Path) -> None:
     rules = clean.load_rules(write(tmp_path / "rules.json", MINE))
 
     assert isinstance(rules, dict)
-    assert rules["global_tracker_keys"] == ["mine_only_tracker"]
+    assert "mine_only_tracker" in rules["global_tracker_keys"]
+    assert "fbclid" in rules["global_tracker_keys"], "the user's file replaced the bundled set"
 
 
 def test_load_rules_still_falls_back_on_a_corrupt_file(tmp_path: Path) -> None:

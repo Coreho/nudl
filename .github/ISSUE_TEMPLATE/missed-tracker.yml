@@ -1,0 +1,38 @@
+name: nudl missed a tracker
+description: A link came out of nudl with tracking junk still on it.
+labels: ["rules", "missed-tracker"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks — this is how nudl's rules get better.
+
+        **Only paste what you're happy to make public.** Links can carry private things
+        (share tokens, email addresses, session ids). Replace anything like that with `XXX`;
+        the parameter *names* are what matter, not their values.
+  - type: textarea
+    id: link
+    attributes:
+      label: The link, as nudl left it
+      description: Or the original, before nudl — redacted as above.
+      placeholder: https://example.com/page?ref_campaign=XXX&id=42
+    validations:
+      required: true
+  - type: input
+    id: tracker
+    attributes:
+      label: Which part is the tracker?
+      placeholder: ref_campaign
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: How do you know it's safe to remove?
+      description: Does the link still open the same page without it? nudl's first rule is never to break a link someone needed.
+  - type: input
+    id: version
+    attributes:
+      label: nudl version
+      description: Tray → About, `nudl --version`, or the bottom of the web page.
+      placeholder: "0.2.0"

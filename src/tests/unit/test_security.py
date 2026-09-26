@@ -316,3 +316,53 @@ def test_anything_else_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path) -> 
     app_module.NudlApp._open(tmp_path / "script.bat")
 
     assert opened == []
+
+
+# ---------------------------------------------------------------------------------------
+# Patterns matched against the whole URL get the same ReDoS refusal as key patterns
+# ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pattern", ["^(a+)+$", "(x+x+)+y", "(.*a){15}"])
+def test_a_catastrophic_exception_or_rawrule_cannot_hang_the_engine(pattern: str) -> None:
+    """exceptions and rawRules run against the full URL, so they were the open door."""
+    rules = {
+        "global_tracker_keys": ["utm_source"],
+        "providers": [
+            {
+                "name": "x",
+                "urlPattern": r"(^|\.)x\.com$",
+                "exceptions": [pattern],
+                "rawRules": [{"pattern": pattern, "replacement": ""}],
+            }
+        ],
+        "redirect_wrappers": [],
+        "referral": [],
+    }
+    url = "https://x.com/" + "a" * 3000 + "!?utm_source=1"
+    start = time.perf_counter()
+    result = clean.clean(url, rules=rules)
+    assert time.perf_counter() - start < 1.0, f"{pattern!r} hung the engine"
+    assert result == "https://x.com/" + "a" * 3000 + "!", "a refused pattern changed behaviour"
+
+
+def test_the_validator_says_why_such_a_pattern_does_nothing() -> None:
+    from src import validate
+
+    findings = validate.check_rules(
+        {
+            "providers": [
+                {
+                    "name": "x",
+                    "urlPattern": r"(^|\.)x\.com$",
+                    "exceptions": ["(a+)+"],
+                    "rawRules": [{"pattern": "(a+)+", "replacement": ""}],
+                }
+            ]
+        }
+    )
+    refused = [f for f in findings if "nested quantifier" in f.message]
+    assert [f.where for f in refused] == [
+        "providers[0] (x).exceptions[0]",
+        "providers[0] (x).rawRules[0]",
+    ]

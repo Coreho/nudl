@@ -285,6 +285,26 @@ def check_rules(rules: dict[str, Any]) -> list[Finding]:
     findings += _check_patterns(rules, "referral")
     findings += _check_providers(rules)
     findings += _check_wrappers(rules)
+    findings += _check_keep(rules)
+    return findings
+
+
+def _check_keep(rules: dict[str, Any]) -> list[Finding]:
+    """`keep` holds exact keys, not patterns: `^utm_.*$` in it would protect nothing."""
+    values, findings = _as_list(rules.get("keep"), "keep")
+    for index, value in enumerate(values):
+        spot = f"keep[{index}]"
+        if not isinstance(value, str) or not value.strip():
+            findings.append(Finding("error", spot, "must be a key name, like \"utm_campaign\""))
+        elif value.startswith("^") or value.endswith("*"):
+            findings.append(
+                Finding(
+                    "error",
+                    spot,
+                    f"{value!r} looks like a pattern, but keep matches exact key names only — "
+                    "write out each key you want kept",
+                )
+            )
     return findings
 
 
@@ -335,7 +355,17 @@ def _check_regexes(container: dict[str, Any], key: str, where: str) -> list[Find
                     "exception protects nothing",
                 )
             )
+            continue
+        if clean.url_regex(value, re.IGNORECASE) is None:
+            findings.append(Finding("error", spot, _refused(value, "protects nothing")))
     return findings
+
+
+def _refused(pattern: str, consequence: str) -> str:
+    return (
+        f"{pattern!r} has a nested quantifier, which can take minutes to run on a long URL — "
+        f"the engine refuses it, so this {consequence}"
+    )
 
 
 def _check_url_pattern(pattern: object, where: str) -> list[Finding]:
@@ -409,6 +439,9 @@ def _check_raw_rules(provider: dict[str, Any], where: str) -> list[Finding]:
                         "nothing",
                     )
                 )
+            else:
+                if clean.url_regex(pattern) is None:
+                    findings.append(Finding("error", spot, _refused(pattern, "rule does nothing")))
 
         if "replacement" not in rule:
             findings.append(
@@ -506,16 +539,22 @@ def summarise_check(path: Path, load: clean.RulesLoad, findings: list[Finding]) 
     source = load.source
     if load.path is not None and load.source != "custom":
         source = f"{source} ({load.path})"
+    if load.own is not None:
+        source = f"{source} — layered on the bundled rules"
     if load.error is not None:
         source = f"{source} — {path.name} {load.error}"
 
-    lines = [
-        f"Checked:  {path}",
-        f"Source:   {source}",
-        f"Schema:   {summary.schema_version} (this nudl understands {clean.SCHEMA_VERSION})",
-        f"Contents: {summary.describe()}",
+    lines = [f"Checked:  {path}", f"Source:   {source}"]
+    if load.own is not None:
+        own = clean.summarize(load.own)
+        lines += [
+            f"Schema:   {own.schema_version} (this nudl understands {clean.SCHEMA_VERSION})",
+            f"Yours:    {own.describe()}, {own.keep} kept",
+        ]
+    lines += [
+        f"Live:     {summary.describe()}",
         f"          {summary.provider_keys} provider patterns, {summary.referral} referral keys",
-        f"Updated:  {summary.last_updated or 'not stated'}",
+        f"Updated:  bundled rules {summary.last_updated or 'not dated'}",
         "",
     ]
     lines.extend(finding.describe() for finding in findings)
@@ -550,7 +589,9 @@ def _check_findings(path: Path, load: clean.RulesLoad) -> list[Finding]:
     """
     if load.error is not None and path.exists():
         return [Finding("error", path.name, load.error)]
-    return check_rules(load.rules)
+    # The user's own file when there is one — not the merged set, which would report the
+    # bundled rules' deliberate warnings as if they were lines the user had written.
+    return check_rules(load.own if load.own is not None else load.rules)
 
 
 # ---------------------------------------------------------------------------------------

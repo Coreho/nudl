@@ -187,3 +187,61 @@ def test_repeated_writes_do_not_drift() -> None:
     assert clipboard.get_text() == f"{UGLY}&n=4"
     time.sleep(0.05)
     assert clipboard.get_text() == f"{UGLY}&n=4", "the clipboard changed after we stopped writing"
+
+
+# -- what other apps put there, and how nudl reads it ---------------------------------------
+
+
+def _copy_like_a_password_manager(text: str, marker: str) -> None:
+    import win32clipboard
+    import win32con
+
+    # Through nudl's own retrying open: another process holding the clipboard for a moment
+    # is normal, and a bare OpenClipboard made this helper, not nudl, fail now and then.
+    with clipboard._opened():
+        win32clipboard.EmptyClipboard()
+        win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+        fmt = win32clipboard.RegisterClipboardFormat(marker)
+        payload = b"\x00\x00\x00\x00" if marker == "CanIncludeInClipboardHistory" else b"\x01"
+        win32clipboard.SetClipboardData(fmt, payload)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "ExcludeClipboardContentFromMonitorProcessing",
+        "Clipboard Viewer Ignore",
+        "CanIncludeInClipboardHistory",
+    ],
+)
+def test_a_copy_marked_private_is_seen_as_private_and_not_read(marker: str) -> None:
+    _copy_like_a_password_manager("hunter2 https://e.com/?utm_source=x", marker)
+    snapshot = clipboard.read_snapshot(want_html=True)
+    assert snapshot.private is True
+    assert snapshot.text is None, "nudl read the text of a copy it was asked not to read"
+
+
+def test_an_ordinary_copy_is_not_private() -> None:
+    clipboard.set_text(UGLY)
+    snapshot = clipboard.read_snapshot()
+    assert snapshot.private is False
+    assert snapshot.text == UGLY
+
+
+def test_formatted_text_goes_out_and_comes_back_byte_for_byte() -> None:
+    html = b"Version:0.9\r\nStartHTML:0000000097\r\nEndHTML:0000000140\r\n<html>x</html>"
+    clipboard.set_text("x", html=html)
+    snapshot = clipboard.read_snapshot(want_html=True)
+    assert snapshot.text == "x"
+    assert snapshot.html is not None and snapshot.html.rstrip(b"\x00") == html
+
+
+def test_nudl_dash_dash_clipboard_cleans_the_real_clipboard(capsys, monkeypatch, tmp_path) -> None:
+    from src import cli
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))  # never the developer's real config
+
+    clipboard.set_text(f"see {UGLY} now")
+    assert cli.main(["--clipboard"]) == 0
+    assert clipboard.get_text() == f"see {CLEAN} now"
+    assert "removed 2 trackers" in capsys.readouterr().err
