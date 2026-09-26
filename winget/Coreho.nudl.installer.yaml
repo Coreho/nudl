@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
 # nudl ships as a PyInstaller --onedir tree (nudl.exe + nudlw.exe over an _internal
 # folder of dependencies) inside a zip, not a single portable exe. "zip" + NestedInstallerType
 # "portable" is the pattern winget-pkgs uses for that shape: the whole archive is
@@ -20,4 +22,4 @@ Installers:
     InstallerUrl: https://github.com/Coreho/nudl/releases/download/v0.2.0/nudl-0.2.0-win64.zip
     InstallerSha256: BC6242763694B882279A330C9E6A37F25F4F21646990EE957F1DAA72FDF37316
 ManifestType: installer
-ManifestVersion: 1.6.0
+ManifestVersion: 1.12.0
