@@ -13,10 +13,11 @@ winget install Coreho.nudl
 **Or [try it in your browser](https://coreho.github.io/nudl/)** — paste a link or a whole
 message; nothing you paste leaves the page.
 
-![nudl removing three trackers from a copied Amazon link](https://raw.githubusercontent.com/Coreho/nudl/master/docs/demo.gif)
+![nudl cleaning both links in a copied message, leaving the words around them untouched](https://raw.githubusercontent.com/Coreho/nudl/master/docs/demo.gif)
 
-Note what *survives*: `psc=1` is a real parameter the link needs, so nudl leaves it alone. It
-strips only what it recognises as tracking, and nothing else.
+Note what *survives*: `psc=1` and `t=42` are real parameters those links need, so nudl leaves
+them alone, and every other character of the message comes back exactly as it was. It strips
+only what it recognises as tracking, and nothing else.
 
 ```
 https://youtu.be/dQw4w9WgXcQ?si=Ab12Cd34Ef56&t=42
@@ -268,17 +269,26 @@ It's a small unsigned tool that reads your clipboard, so it's fair to be suspici
 - SmartScreen will warn about the unsigned build. That means Windows doesn't recognise the
   publisher — not that it found anything. Code signing is on the roadmap.
 
-### The VirusTotal score, stated plainly
+### The antivirus picture, stated plainly
 
-**[1 of ~70 engines flags the v0.1.0 download](https://www.virustotal.com/gui/file/96d640071927403ae992e2647d106238621f23e526b5b554df1006028b3c4261)** — `nudl-0.1.0-win64.zip`, SHA-256 `96d64007…4261`. Verify any download yourself with `Get-FileHash`; each release lists its hash.
+**The current download, `nudl-0.2.0-win64.zip`, is SHA-256 `bc624276…7316`** (the
+[release](https://github.com/Coreho/nudl/releases/tag/v0.2.0) has the full hash). Verify any
+download yourself with `Get-FileHash`; each release lists its hash.
 
-I'd rather you hear that from me than find it yourself.
+- **Microsoft Defender scans it clean** — the 0.2.0 zip and everything inside it, with current
+  signatures and real-time protection on. Defender is what actually decides whether nudl runs
+  on your machine.
+- **winget's validation scans every package** before it reaches `winget install`, and nudl
+  has been through it. (The v0.1.1 zip was briefly pulled by a cloud heuristic and then
+  re-admitted unchanged once the verdict aged out — the whole story is in
+  [docs/RELEASING.md](docs/RELEASING.md).)
+- **[VirusTotal: 1 of ~70 engines flagged the v0.1.0 zip](https://www.virustotal.com/gui/file/96d640071927403ae992e2647d106238621f23e526b5b554df1006028b3c4261)**,
+  the last build uploaded there. I'd rather you hear that from me than find it yourself.
 
 That one detection is a machine-learning heuristic, and what it reacts to is **PyInstaller**, not nudl. Bundling a Python interpreter into a self-extracting executable looks structurally like a packer, and packers are what malware uses to hide — so aggressive engines flag *tools built this way* regardless of what they do. It's a known false-positive pattern, not a finding about this code.
 
-- **Microsoft Defender scans it clean**, with current signatures and real-time protection on — the v0.2.0 zip included. Defender is what actually decides whether nudl runs on your machine.
 - **Every major engine reads clean.**
-- For completeness: the [bootloader `nudl.exe` scanned on its own](https://www.virustotal.com/gui/file/27a5c30a9c6a6b220bcb2f25bfc8f867ce5b108f9f8b8c882f7db83cfecc61ea) draws 3 flags (ArcticWolf, SecureAge). That file is a stub — it contains none of nudl's logic and cannot even run without the `_internal` folder beside it. The zip above is the honest scan, and it's the one you download.
+- For completeness: the [bootloader `nudl.exe` scanned on its own](https://www.virustotal.com/gui/file/27a5c30a9c6a6b220bcb2f25bfc8f867ce5b108f9f8b8c882f7db83cfecc61ea) draws 3 flags (ArcticWolf, SecureAge). That file is a stub — it contains none of nudl's logic and cannot even run without the `_internal` folder beside it. The zip is the honest scan, and it's the one you download.
 
 Not satisfied? That's a completely reasonable place to land. Run it from source instead — no packed binary at all, and every line is readable. Or use [the web page](https://coreho.github.io/nudl/), which needs no install at all.
 

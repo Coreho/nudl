@@ -37,19 +37,27 @@ if not result.changed or "t=42" not in AFTER:
     raise SystemExit("the preview URL no longer cleans the way the card shows -- fix the card")
 
 
-def font(name: str, size: int) -> ImageFont.FreeTypeFont:
-    try:
-        return ImageFont.truetype(name, size)
-    except OSError:
-        return ImageFont.load_default(size)
+def font(size: int, *names: str) -> ImageFont.FreeTypeFont:
+    """The first of `names` that exists: Segoe/Consolas on Windows, Liberation elsewhere."""
+    for name in names:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size)
 
 
-F_TITLE = font("segoeuib.ttf", 112)
-F_TAG = font("segoeui.ttf", 44)
-F_LABEL = font("segoeui.ttf", 24)
-F_URL = font("consola.ttf", 31)
-F_FOOT = font("segoeui.ttf", 27)
-F_CMD = font("consolab.ttf", 29)
+SANS = ("segoeui.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf")
+SANS_B = ("segoeuib.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf")
+MONO = ("consola.ttf", "LiberationMono-Regular.ttf", "DejaVuSansMono.ttf")
+MONO_B = ("consolab.ttf", "LiberationMono-Bold.ttf", "DejaVuSansMono-Bold.ttf")
+
+F_TITLE = font(112, *SANS_B)
+F_TAG = font(44, *SANS)
+F_LABEL = font(24, *SANS)
+F_URL = font(31, *MONO)
+F_FOOT = font(27, *SANS)
+F_CMD = font(29, *MONO_B)
 
 
 def url_tokens(url: str, removed: list[str]) -> list[tuple[str, tuple[int, int, int], bool]]:
@@ -90,14 +98,15 @@ draw_runs(d, url_tokens(BEFORE, result.params_removed), MARGIN, panel_top + 58)
 d.text((MARGIN, panel_top + 108), "you paste", font=F_LABEL, fill=MUTED)
 d.text((MARGIN, panel_top + 140), AFTER, font=F_URL, fill=ACCENT)
 
-d.text(
-    (MARGIN, 556),
-    "Windows tray app + command line  ·  offline  ·  open source",
-    font=F_FOOT,
-    fill=MUTED,
-)
-cmd = "winget install nudl"
-d.text((W - MARGIN - d.textlength(cmd, font=F_CMD), 560), cmd, font=F_CMD, fill=ACCENT)
+where = "Windows tray app  ·  command line on any OS  ·  in your browser"
+how = "offline  ·  open source"
+cmd = "winget install Coreho.nudl"
+d.text((MARGIN, 536), where, font=F_FOOT, fill=MUTED)
+d.text((MARGIN, 578), how, font=F_FOOT, fill=MUTED)
+d.text((W - MARGIN - d.textlength(cmd, font=F_CMD), 580), cmd, font=F_CMD, fill=ACCENT)
+# The command shares its line with `how`; if either grows they overlap without any error.
+if d.textlength(how, font=F_FOOT) + 40 + d.textlength(cmd, font=F_CMD) > W - 2 * MARGIN:
+    raise SystemExit("the footer and the install command overlap -- shorten one of them")
 
 # A longer example URL would run off the panel with no error at all, so say so instead.
 if d.textlength(BEFORE, font=F_URL) > W - 2 * MARGIN:
