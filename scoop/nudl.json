@@ -1,22 +1,27 @@
 {
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "Strips tracking junk off any link you copy — system-wide, not just in the browser. Same real URL, trimmed.",
     "homepage": "https://github.com/Coreho/nudl",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/Coreho/nudl/releases/download/v0.1.1/nudl-0.1.1-win64.zip",
-            "hash": "483022d53020774517532fff2cdad4e34bd3564487cf57b36ba71bf61ef9cf5a"
+            "url": "https://github.com/Coreho/nudl/releases/download/v0.2.0/nudl-0.2.0-win64.zip",
+            "hash": "56589b118330514db29583e47509af8da6668ac2de040aa4e551b6a62a724e69"
         }
     },
+    "bin": [
+        "nudl.exe",
+        "nudlw.exe"
+    ],
     "shortcuts": [
         [
-            "nudl.exe",
+            "nudlw.exe",
             "nudl"
         ]
     ],
     "notes": [
-        "nudl runs in the system tray. On first launch it asks whether to clean links on a hotkey (Ctrl+Alt+V) or automatically as you copy them.",
+        "nudl runs in the system tray (nudlw.exe, the 'nudl' Start menu shortcut). On first launch it asks whether to clean links on a hotkey (Ctrl+Alt+V) or automatically as you copy them, and whether to start with Windows.",
+        "`nudl` is the command line: Get-Clipboard | nudl | Set-Clipboard",
         "Settings, the rule set and the local audit log live in %AppData%\\nudl\\.",
         "nudl makes no network calls. Your links never leave your machine."
     ],

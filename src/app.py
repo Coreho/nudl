@@ -36,10 +36,10 @@ import win32event
 import win32security
 import winerror
 
-from src import autostart, clean, clipboard, config, hotkey
-from src.hidden_window import MessageWindow
-from src.toast import OverlayUI
-from src.tray import Tray
+from . import autostart, clean, clipboard, config, hotkey
+from .hidden_window import MessageWindow
+from .toast import OverlayUI
+from .tray import Tray
 
 logger = logging.getLogger(__name__)
 

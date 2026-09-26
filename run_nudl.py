@@ -1,10 +1,12 @@
-"""Frozen-build entry point.
+"""Frozen-build entry point for nudl.exe, the command line.
 
-PyInstaller freezes a *script*, not a package, so it needs a top-level module that can
-import `src` normally. Running from source, prefer `pythonw -m src.app`.
+The counterpart of run_nudlw.py, and for the same reason: PyInstaller freezes a script,
+not a package. Running from source, prefer `python -m src.cli`.
 """
 
-from src.app import main
+import sys
+
+from src.cli import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,19 +1,41 @@
 [project]
 name = "nudl"
-version = "0.1.1"
+# Read from src/__init__.py, the one place it is written down. See the comment there.
+dynamic = ["version"]
 description = "Strip tracking junk off any link you copy — the same real URL, trimmed."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Coreho" }]
+keywords = ["url", "privacy", "tracking", "utm", "clipboard", "link-cleaner", "clearurls"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Security",
+    "Topic :: Utilities",
+]
 dependencies = [
+    # Both Windows-only. Off Windows, `pip install nudl` is the command line and nothing
+    # else, and a CLI has no business pulling in a tray library and its Pillow.
     "pywin32>=306; sys_platform == 'win32'",
     # Pinned, not floored. tray.py ships the pre-rendered icon through `_IcoBytes`,
     # which satisfies pystray's private `_util.serialized_image` contract — it only
     # calls `.save(fp, format=...)`. That is what lets nudl drop Pillow entirely.
     # test_tray_icon.py guards the contract; this pin is what stops a silent minor
     # upgrade from moving it underneath us between releases.
-    "pystray==0.19.*",
+    "pystray==0.19.*; sys_platform == 'win32'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Coreho/nudl"
+"What it removes" = "https://github.com/Coreho/nudl/blob/master/docs/RULES.md"
+Issues = "https://github.com/Coreho/nudl/issues"
 
 [project.optional-dependencies]
 # Pillow is a TOOLING dependency, never a runtime one: tools/make_icon.py renders the
@@ -22,30 +44,40 @@ dependencies = [
 # because the docs scripts are run by hand; test_tray_icon.py is what fails loudly if it
 # ever creeps back into the app's import graph.
 dev = ["pytest>=8", "ruff>=0.6", "Pillow>=9.2"]
-build = ["pyinstaller>=6", "Pillow>=9.2"]
+build = ["pyinstaller>=6", "Pillow>=9.2", "build>=1", "twine>=5"]
 
 # Without these, `pip install nudl` installs a package with no way to start it.
-# `nudlw` is the windowed entry point (no console window); `nudl` keeps a console,
-# which is what you want when something is going wrong.
+# `nudl` is the command line, and runs everywhere. `nudlw` is the Windows tray app,
+# windowed (no console); off Windows it explains itself and exits.
 [project.scripts]
-nudl = "src.app:main"
+nudl = "nudl.cli:main"
 # The validator is a console tool by nature — it prints a report and exits. It is listed
 # separately so `pip install nudl` gives a user a way to check their rules file without
 # knowing that `python -m src.validate` exists.
-nudl-validate = "src.validate:main"
+nudl-validate = "nudl.validate:main"
 
 [project.gui-scripts]
-nudlw = "src.app:main"
+nudlw = "nudl.cli:tray"
 
 [build-system]
-requires = ["setuptools>=68"]
+# 77 for the SPDX `license = "MIT"` string above.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
+# The code lives in src/, but it installs as `nudl`. Installed under its folder name it
+# would put a top-level package called `src` into site-packages — where it collides with
+# every other project that made the same mistake, and one silently replaces the other.
+# The modules import each other relatively, so the same files run as `src` from a
+# checkout and as `nudl` once installed.
 [tool.setuptools]
-packages = ["src"]
+package-dir = { nudl = "src" }
+packages = ["nudl"]
+
+[tool.setuptools.dynamic]
+version = { attr = "nudl.__version__" }
 
 [tool.setuptools.package-data]
-src = ["rules.json", "nudl.ico"]
+nudl = ["rules.json", "nudl.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]

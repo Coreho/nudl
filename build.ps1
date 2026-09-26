@@ -1,4 +1,5 @@
-# Build the unsigned --onedir distribution.
+# Build the unsigned --onedir distribution: nudl.exe (command line) and nudlw.exe (tray)
+# side by side over one shared _internal\. What goes into each is in nudl.spec.
 #
 # --onedir, NOT --onefile: a onefile build unpacks itself into %TEMP% and runs from
 # there, which is textbook malware behaviour and draws far more AV heuristics than it
@@ -38,10 +39,10 @@ if (Test-Path $dist) {
     }
 }
 
-# One source of truth for the version. Hardcoding it here as well as in pyproject.toml
-# and the Scoop manifest is how you ship a v0.1.1 zip named v0.1.0.
-$versionMatch = Select-String -Path (Join-Path $root "pyproject.toml") -Pattern '^version = "(.+)"'
-if (-not $versionMatch) { throw "no 'version = ""...""' line in pyproject.toml — cannot name the release" }
+# One source of truth for the version: src\__init__.py, which pyproject.toml also reads.
+# Hardcoding it here as well is how you ship a v0.1.1 zip named v0.1.0.
+$versionMatch = Select-String -Path (Join-Path $root "src\__init__.py") -Pattern '^__version__ = "(.+)"'
+if (-not $versionMatch) { throw "no '__version__ = ""...""' line in src\__init__.py — cannot name the release" }
 $version = $versionMatch.Matches[0].Groups[1].Value
 Write-Host "Building nudl $version" -ForegroundColor Cyan
 
@@ -59,11 +60,8 @@ $icoPath = Join-Path $root "src\nudl.ico"
 if ($LASTEXITCODE -ne 0) { throw "icon render failed (exit $LASTEXITCODE)" }
 if (-not (Test-Path $icoPath)) { throw "icon render wrote no file at $icoPath" }
 
-Write-Host "Freezing with PyInstaller (--onedir)..." -ForegroundColor Cyan
-# Paths must be absolute: PyInstaller resolves --add-data relative to --specpath,
-# not to the working directory.
-#
-# The --exclude-module list is load-bearing, not tidiness. PyInstaller resolves imports
+Write-Host "Freezing with PyInstaller (nudl.spec, onedir)..." -ForegroundColor Cyan
+# The exclude list in nudl.spec is load-bearing, not tidiness. PyInstaller resolves imports
 # statically, so `urllib.parse` (all clean.py wants) dragged in urllib.request ->
 # http.client -> ssl, and `random` dragged in _hashlib: between them, 7.4 MB of OpenSSL
 # in a tool whose headline promise is that it makes no network calls. Nothing loads any
@@ -74,32 +72,22 @@ Write-Host "Freezing with PyInstaller (--onedir)..." -ForegroundColor Cyan
 & $python -m PyInstaller `
     --noconfirm `
     --clean `
-    --onedir `
-    --windowed `
-    --name nudl `
-    --icon $icoPath `
-    --add-data "$(Join-Path $root 'src\rules.json');src" `
-    --add-data "$icoPath;src" `
-    --exclude-module ssl `
-    --exclude-module _ssl `
-    --exclude-module urllib.request `
-    --exclude-module http `
-    --exclude-module _hashlib `
-    --paths $root `
     --distpath (Join-Path $root "dist") `
     --workpath (Join-Path $root "build\pyinstaller") `
-    --specpath (Join-Path $root "build") `
-    (Join-Path $root "run_nudl.py")
+    (Join-Path $root "nudl.spec")
 
 # PyInstaller is a native command, so a failure does NOT trip $ErrorActionPreference.
 # Without this check the script sails on and zips up whatever half-built wreckage is
 # lying in dist/ — which is exactly how you ship a 3.9 MB archive that cannot start.
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE). Is nudl.exe still running?" }
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE). Is nudlw.exe still running?" }
 
-$exe = Join-Path $root "dist\nudl\nudl.exe"
-if (-not (Test-Path $exe)) { throw "build failed: no exe at $exe" }
+$exe = Join-Path $root "dist\nudl\nudlw.exe"
+$cliExe = Join-Path $root "dist\nudl\nudl.exe"
+foreach ($built in $exe, $cliExe) {
+    if (-not (Test-Path $built)) { throw "build failed: no exe at $built" }
+}
 
-# nudl.exe on its own is only a bootloader stub — it exists even when the build is
+# nudlw.exe on its own is only a bootloader stub — it exists even when the build is
 # broken. The real payload is _internal\, so validate THAT.
 $internal = Join-Path $root "dist\nudl\_internal"
 # NOT $python — that is the venv interpreter, and clobbering it here would leave a
@@ -114,6 +102,15 @@ $distMb = (Get-ChildItem (Join-Path $root "dist\nudl") -Recurse -File | Measure-
 if ($distMb -lt 12) { throw ("build is incomplete: dist is only {0:N1} MB (expected 12+)" -f $distMb) }
 Write-Host ("  payload: {0:N1} MB, python DLL present" -f $distMb) -ForegroundColor Green
 
+# Run the command line, for real, before anything gets zipped. nudl.exe is the half of
+# the build that can be exercised without touching the tray, the hotkey or the clipboard.
+$probe = "https://youtu.be/dQw4w9WgXcQ?si=build-check&t=42"
+$cleaned = & $cliExe $probe
+if ($LASTEXITCODE -ne 0 -or $cleaned -ne "https://youtu.be/dQw4w9WgXcQ?t=42") {
+    throw "nudl.exe smoke test failed: got '$cleaned' (exit $LASTEXITCODE)"
+}
+Write-Host "  nudl.exe cleans a link: ok" -ForegroundColor Green
+
 $zip = Join-Path $root "dist\nudl-$version-win64.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path (Join-Path $root "dist\nudl\*") -DestinationPath $zip
@@ -121,18 +118,21 @@ Compress-Archive -Path (Join-Path $root "dist\nudl\*") -DestinationPath $zip
 # The hashes people verify the download against.
 $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+$cliHash = (Get-FileHash $cliExe -Algorithm SHA256).Hash.ToLower()
 $zipHash | Out-File -Encoding ascii -NoNewline "$zip.sha256"
 
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host ""
 Write-Host "Built:  $exe" -ForegroundColor Green
+Write-Host "        $cliExe" -ForegroundColor Green
 Write-Host "Ship:   $zip  ($size MB)" -ForegroundColor Green
 Write-Host ""
-Write-Host "zip SHA-256: $zipHash" -ForegroundColor Yellow
-Write-Host "exe SHA-256: $exeHash" -ForegroundColor Yellow
+Write-Host "zip       SHA-256: $zipHash" -ForegroundColor Yellow
+Write-Host "nudlw.exe SHA-256: $exeHash" -ForegroundColor Yellow
+Write-Host "nudl.exe  SHA-256: $cliHash" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "The zip hash must be pinned in scoop/nudl.json, and the zip re-scanned on"
-Write-Host "VirusTotal -- a scan of the previous build describes a file nobody can download."
+Write-Host "Next: docs\RELEASING.md. The zip hash goes in scoop/nudl.json and the winget"
+Write-Host "manifest, and THIS zip is the one to scan and upload -- rebuilding changes the hash."
 }
 finally {
     Pop-Location

@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from src import clean, config
+from . import clean, config
 
 __all__ = [
     "Finding",
@@ -953,7 +953,7 @@ def _reserved_paths(path: Path) -> tuple[Path, ...]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m src.validate",
+        prog="nudl-validate",
         description=(
             "Check and experiment with nudl's rules. Never touches the network and never "
             "writes to the rules file nudl reads."
