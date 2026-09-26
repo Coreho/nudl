@@ -81,7 +81,9 @@ a project-scoped token and GitHub trusted publishing.
 ## 6. master
 
 Merge the branch into master and push. The README and Scoop manifest are now live, and both
-point at things that exist.
+point at things that exist. The push also runs the Pages workflow, which tests the engine and
+republishes <https://coreho.github.io/nudl/> with the new `clean.py` and rules — check the
+Actions tab that it went green, and open the page once.
 
 ## 7. winget
 
@@ -98,3 +100,8 @@ checks for updates itself.
 
 - GitHub → Settings → General → Social preview: upload `docs/social-preview.png`
   (`python docs/make_social_preview.py` regenerates it). GitHub has no API for this.
+- GitHub → Settings → Pages → Source: **GitHub Actions**. Until then the Pages workflow has
+  nowhere to deploy. (`gh api -X POST repos/Coreho/nudl/pages -f build_type=workflow` does the
+  same.)
+- To try the page before publishing: `python tools/build_web.py`, then
+  `python -m http.server -d dist/web` and open <http://localhost:8000>.

@@ -6,7 +6,7 @@
     "architecture": {
         "64bit": {
             "url": "https://github.com/Coreho/nudl/releases/download/v0.2.0/nudl-0.2.0-win64.zip",
-            "hash": "56589b118330514db29583e47509af8da6668ac2de040aa4e551b6a62a724e69"
+            "hash": "bc6242763694b882279a330c9e6a37f25f4f21646990ee957f1daa72fdf37316"
         }
     },
     "bin": [

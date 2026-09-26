@@ -18,6 +18,6 @@ NestedInstallerFiles:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Coreho/nudl/releases/download/v0.2.0/nudl-0.2.0-win64.zip
-    InstallerSha256: 56589B118330514DB29583E47509AF8DA6668AC2DE040AA4E551B6A62A724E69
+    InstallerSha256: BC6242763694B882279A330C9E6A37F25F4F21646990EE957F1DAA72FDF37316
 ManifestType: installer
 ManifestVersion: 1.6.0
