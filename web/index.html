@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nudl — clean links</title>
+<meta name="description" content="Paste a link, or a whole message. The tracking junk comes off. Nothing you paste leaves this page.">
+<!-- No referrer: a shared link can arrive in this page's address, and must never be
+     handed to the next site someone clicks through to. -->
+<meta name="referrer" content="no-referrer">
+<!-- The page may talk to exactly two places: itself, and the CDN Pyodide comes from.
+     There is nowhere for what you paste to go. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#16181d">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<style>
+  :root {
+    --bg: #0d0f12; --panel: #16181d; --field: #1e2127; --line: #2a2e35;
+    --fg: #e8eaed; --muted: #9aa0a6; --accent: #4cb782; --red: #ed6a5e;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f7f9; --panel: #ffffff; --field: #ffffff; --line: #d9dde3;
+      --fg: #16181d; --muted: #5f6570; --accent: #1f8a57; --red: #c2412f;
+      color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 40px; margin: 0; letter-spacing: -0.5px; }
+  h1 .dot { color: var(--accent); }
+  .lede { color: var(--muted); margin: 4px 0 24px; }
+  label { display: block; font-weight: 600; margin: 18px 0 6px; }
+  textarea {
+    width: 100%; min-height: 120px; resize: vertical; padding: 12px 14px;
+    background: var(--field); color: var(--fg); border: 1px solid var(--line); border-radius: 10px;
+    font: 15px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #output { min-height: 90px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 16px;
+    background: var(--accent); color: #0d0f12; cursor: pointer;
+  }
+  button.quiet { background: var(--line); color: var(--fg); font-weight: 500; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { color: var(--muted); font-size: 14px; }
+  #removed { list-style: none; padding: 0; margin: 14px 0 0; }
+  #removed li { font-size: 14px; color: var(--muted); padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+  #removed code { color: var(--red); }
+  .examples { font-size: 14px; color: var(--muted); }
+  .examples button { padding: 4px 10px; font-size: 13px; }
+  footer { margin-top: 40px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+  footer a { color: var(--accent); }
+  code.cmd { background: var(--field); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; color: var(--fg); }
+</style>
+</head>
+<body>
+<main>
+  <h1>nudl<span class="dot">.</span></h1>
+  <p class="lede">Paste a link — or a whole message. The tracking junk comes off, and the link still works.
+    Nothing you paste leaves this page.</p>
+
+  <label for="input">Paste here</label>
+  <textarea id="input" spellcheck="false" autofocus
+    placeholder="https://youtu.be/dQw4w9WgXcQ?si=Ab12Cd34Ef56&amp;t=42"></textarea>
+  <div class="row examples">Try:
+    <button class="quiet" data-example="https://youtu.be/dQw4w9WgXcQ?si=Ab12Cd34Ef56&amp;t=42">YouTube share</button>
+    <button class="quiet" data-example="https://www.amazon.com/dp/B08X7QK2P?tag=affiliate-20&amp;ref_=nb_sb&amp;psc=1&amp;utm_source=newsletter">Amazon</button>
+    <button class="quiet" data-example="Loved this: https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Farticle%3Futm_source%3Dfb&amp;h=AT1 — and https://www.instagram.com/reel/C1abc/?igsh=MWx0bHk3">A message</button>
+  </div>
+
+  <label for="output">Clean</label>
+  <textarea id="output" readonly spellcheck="false" placeholder="The cleaned version appears here."></textarea>
+  <div class="row">
+    <button id="copy" disabled>Copy</button>
+    <span id="status">Loading the cleaning engine — about 6 MB, once, then it works offline.</span>
+  </div>
+  <ul id="removed"></ul>
+
+  <footer>
+    <p>This page runs <a href="https://github.com/Coreho/nudl/blob/master/src/clean.py">nudl's own cleaning engine</a>
+      — the same Python file the Windows app uses — right here in your browser, with
+      <a href="https://pyodide.org">Pyodide</a>. There is no server to send your text to, and the page's
+      security policy wouldn't let it anyway.</p>
+    <p>It only strips parameters it knows are tracking, and leaves signed links and anything it isn't sure of
+      alone. <a href="https://github.com/Coreho/nudl/blob/master/docs/RULES.md">What it removes, and what it deliberately doesn't.</a></p>
+    <p>Everywhere you copy links: <code class="cmd">winget install Coreho.nudl</code> (Windows tray app) ·
+      <code class="cmd">pipx install nudl</code> (command line, any OS) ·
+      <a href="https://github.com/Coreho/nudl">GitHub</a></p>
+    <p id="version"></p>
+  </footer>
+</main>
+
+<script type="module">
+  const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
+  const input = document.getElementById("input");
+  const output = document.getElementById("output");
+  const copy = document.getElementById("copy");
+  const status = document.getElementById("status");
+  const removed = document.getElementById("removed");
+  document.getElementById("version").textContent = "nudl __NUDL_VERSION__ · rules __RULES_DATE__";
+
+  // A link shared to the installed app (Android's share sheet) arrives in the address.
+  // Take it, then wipe it from the address bar and history straight away.
+  const params = new URLSearchParams(location.search);
+  const shared = [params.get("text"), params.get("url")].filter(Boolean);
+  if (shared.length) {
+    input.value = [...new Set(shared)].join(" ");
+    history.replaceState(null, "", location.pathname);
+  }
+
+  let cleanText = null;
+
+  function render() {
+    removed.replaceChildren();
+    if (!cleanText) return;
+    const text = input.value;
+    const result = JSON.parse(cleanText(text));
+    output.value = result.result;
+    copy.disabled = !result.result;
+    if (!text.trim()) { status.textContent = "Ready. Runs entirely in your browser."; return; }
+    if (!result.links.length) {
+      status.textContent = /https?:\/\//i.test(text)
+        ? "Nothing to remove — that's already clean."
+        : "No link in there yet.";
+      return;
+    }
+    const count = result.links.reduce((n, l) => n + l.removed.length, 0);
+    status.textContent = count
+      ? `Removed ${count} tracker${count === 1 ? "" : "s"} from ${result.links.length} link${result.links.length === 1 ? "" : "s"}.`
+      : "Unwrapped the redirect.";
+    for (const link of result.links) {
+      const li = document.createElement("li");
+      const host = new URL(link.result).hostname.replace(/^www\./, "");
+      const unwrapped = new URL(link.original).hostname !== new URL(link.result).hostname;
+      li.append(`${host} — ${unwrapped ? "unwrapped from a redirect" : ""}`);
+      if (link.removed.length) {
+        li.append(unwrapped ? ", removed " : "removed ");
+        link.removed.forEach((key, i) => {
+          if (i) li.append(", ");
+          const code = document.createElement("code");
+          code.textContent = key;
+          li.append(code);
+        });
+      } else if (!unwrapped) {
+        li.append("rewritten");
+      }
+      removed.append(li);
+    }
+  }
+
+  let pending = 0;
+  input.addEventListener("input", () => { clearTimeout(pending); pending = setTimeout(render, 60); });
+  for (const example of document.querySelectorAll("[data-example]")) {
+    example.addEventListener("click", () => { input.value = example.dataset.example; render(); });
+  }
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(output.value);
+      copy.textContent = "Copied";
+    } catch {
+      output.select();
+      copy.textContent = "Press Ctrl+C";
+    }
+    setTimeout(() => (copy.textContent = "Copy"), 1500);
+  });
+
+  try {
+    const { loadPyodide } = await import(`${PYODIDE}pyodide.mjs`);
+    const [pyodide, source, rules] = await Promise.all([
+      loadPyodide({ indexURL: PYODIDE }),
+      fetch("engine/clean.py").then((r) => r.text()),
+      fetch("engine/rules.json").then((r) => r.text()),
+    ]);
+    pyodide.FS.mkdirTree("/nudl");
+    pyodide.FS.writeFile("/nudl/clean.py", source);
+    pyodide.FS.writeFile("/nudl/rules.json", rules);
+    cleanText = pyodide.runPython(`
+import json, sys
+sys.path.insert(0, "/nudl")
+import clean
+
+def _nudl(text):
+    r = clean.clean_text(text)
+    return json.dumps({
+        "result": r.result,
+        "links": [
+            {"original": l.original, "result": l.result, "removed": l.params_removed}
+            for l in r.links
+        ],
+    })
+_nudl
+`);
+    status.textContent = "Ready. Runs entirely in your browser.";
+    document.body.dataset.ready = "1";
+    render();
+  } catch (error) {
+    status.textContent = "The cleaning engine didn't load. Check your connection and reload — after one successful load it works offline.";
+    console.error(error);
+  }
+
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>

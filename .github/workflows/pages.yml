@@ -1,0 +1,54 @@
+# Publishes the "try it in your browser" page (web/) to GitHub Pages.
+#
+# The page runs the real engine, so the engine's tests run first: a clean.py that fails
+# its own corpus never reaches the page. Needs Pages set to "GitHub Actions" once, in
+# Settings > Pages (docs/RELEASING.md).
+name: Web page
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "web/**"
+      - "src/clean.py"
+      - "src/rules.json"
+      - "src/__init__.py"
+      - "tools/build_web.py"
+      - "tools/make_icon.py"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: pip install "pytest>=8" "Pillow>=9.2"
+      # The engine and everything the page leans on; the Win32 tests skip themselves.
+      - run: python -m pytest src/tests/test_clean.py src/tests/unit/test_clean_text.py src/tests/unit/test_rules_schema.py -q
+      - run: python tools/build_web.py dist/web
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
