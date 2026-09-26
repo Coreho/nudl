@@ -176,7 +176,7 @@ def check_pattern(pattern: str, where: str = "") -> list[Finding]:
         ]
 
     try:
-        matcher = clean._key_matcher(pattern)
+        matcher = clean._compile_pattern(pattern)
     except re.error as exc:
         # Stop here: a pattern that will not compile has no match behaviour to check. The
         # engine skips it silently, so the rule the user thinks they wrote does not exist.

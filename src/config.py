@@ -8,9 +8,12 @@ the defaults wholesale.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 APP_NAME = "nudl"
 
@@ -43,12 +46,17 @@ def log_path() -> Path:
 def rules_path(cfg: dict[str, Any] | None = None) -> Path:
     """The rule file nudl actually reads.
 
-    `rules_path` may be a bare name (resolved inside the config dir, which is where a
-    user would put it) or an absolute path — `Path.__truediv__` already returns the
-    absolute operand unchanged, so both work with no branch here.
+    Must resolve inside the config dir — absolute paths and UNC paths are rejected
+    so a tampered config.json cannot redirect reads (and the os.startfile that
+    follows) to an arbitrary file or remote share.
     """
-    name = (cfg or DEFAULTS).get("rules_path") or DEFAULTS["rules_path"]
-    return config_dir() / str(name)
+    name = str((cfg or DEFAULTS).get("rules_path") or DEFAULTS["rules_path"])
+    base = config_dir().resolve()
+    candidate = (base / name).resolve()
+    if name.startswith("\\\\") or not candidate.is_relative_to(base):
+        logger.warning("rules_path %r escapes %s; using the default", name, base)
+        candidate = base / DEFAULTS["rules_path"]
+    return candidate
 
 
 def rules_backup_path(cfg: dict[str, Any] | None = None) -> Path:

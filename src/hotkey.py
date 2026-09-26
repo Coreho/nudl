@@ -85,6 +85,22 @@ def parse(combo: str) -> tuple[int, int]:
         # A bare key would steal that key from every app on the system.
         raise InvalidHotkey(f"{combo!r} needs at least one modifier")
 
+    # Denylist chords that would hijack a system-wide shortcut the user relies on.
+    # Any single-modifier editing accelerator (ctrl+c, ctrl+v, etc.) or a chord
+    # Windows reserves (alt+tab, win+l) must be refused outright. Matching is on
+    # the exact modifier set — ctrl+alt+v is NOT ctrl+v and is perfectly fine.
+    _DENYLIST = {
+        frozenset({MOD_CONTROL}): frozenset("cvxazsptfnb"),
+        frozenset({MOD_ALT}): frozenset("\t"),
+        frozenset({MOD_WIN}): frozenset("ldrev"),
+        frozenset({MOD_WIN, MOD_CONTROL}): frozenset("d"),
+        frozenset({MOD_ALT, MOD_CONTROL}): frozenset("\t"),
+    }
+    key_lower = key.lower()
+    mod_set = frozenset(m for m in (MOD_CONTROL, MOD_ALT, MOD_SHIFT, MOD_WIN) if modifiers & m)
+    if mod_set in _DENYLIST and key_lower in _DENYLIST[mod_set]:
+        raise InvalidHotkey(f"{combo!r} is a reserved system shortcut and cannot be used")
+
     return modifiers | MOD_NOREPEAT, _virtual_key(key)
 
 

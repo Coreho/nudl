@@ -15,15 +15,15 @@ UGLY = "https://example.com/a?utm_source=x&id=42"
 
 def test_a_write_we_made_is_recognised_by_sequence_number() -> None:
     guard = OwnWriteGuard()
-    guard.arm(CLEAN)
-    guard.confirm(100)
+    token = guard.arm(CLEAN)
+    guard.confirm(token, 100)
     assert guard.is_own_write(100, CLEAN) is True
 
 
 def test_a_users_copy_is_not_ours() -> None:
     guard = OwnWriteGuard()
-    guard.arm(CLEAN)
-    guard.confirm(100)
+    token = guard.arm(CLEAN)
+    guard.confirm(token, 100)
     assert guard.is_own_write(101, UGLY) is False
 
 
@@ -47,8 +47,8 @@ def test_the_guard_is_one_shot() -> None:
     echo and auto-watch would ignore it — permanently un-cleanable.
     """
     guard = OwnWriteGuard()
-    guard.arm(UGLY)  # this is what undo() does
-    guard.confirm(100)
+    token = guard.arm(UGLY)  # this is what undo() does
+    guard.confirm(token, 100)
 
     assert guard.is_own_write(100, UGLY) is True  # the echo of the undo: ignore it
     assert guard.is_own_write(101, UGLY) is False  # user copies it again: CLEAN IT
@@ -61,25 +61,25 @@ def test_a_fresh_guard_owns_nothing() -> None:
 def test_non_text_clipboard_content_is_not_ours() -> None:
     """An image or a file copied to the clipboard reads back as None."""
     guard = OwnWriteGuard()
-    guard.arm(CLEAN)
-    guard.confirm(100)
+    token = guard.arm(CLEAN)
+    guard.confirm(token, 100)
     assert guard.is_own_write(101, None) is False
 
 
 def test_consecutive_writes_track_the_latest() -> None:
     guard = OwnWriteGuard()
-    guard.arm("first")
-    guard.confirm(100)
-    guard.arm("second")
-    guard.confirm(101)
+    token1 = guard.arm("first")
+    guard.confirm(token1, 100)
+    token2 = guard.arm("second")
+    guard.confirm(token2, 101)
 
     assert guard.is_own_write(100, "first") is False  # stale echo, no longer ours
-    guard.arm("second")
-    guard.confirm(101)
+    token3 = guard.arm("second")
+    guard.confirm(token3, 101)
     assert guard.is_own_write(101, "second") is True
 
 
-def test_a_FAILED_write_must_not_poison_the_guard() -> None:
+def test_a_failed_write_must_not_poison_the_guard() -> None:
     """The bug: arm, then the clipboard write fails. The guard stays armed.
 
     Later the user copies that exact link by hand. The guard matches, nudl thinks it's
@@ -102,10 +102,10 @@ def test_confirm_after_a_match_does_not_re_arm() -> None:
     that sequence number in anyway, the guard would be left armed with a stale number.
     """
     guard = OwnWriteGuard()
-    guard.arm(CLEAN)
+    token = guard.arm(CLEAN)
     assert guard.is_own_write(999, CLEAN) is True  # matched by text, guard consumed
 
-    guard.confirm(999)  # the late confirm from the write that already echoed
+    guard.confirm(token, 999)  # the late confirm from the write that already echoed
 
     assert guard.is_own_write(999, CLEAN) is False, "confirm re-armed a consumed guard"
 
@@ -129,9 +129,9 @@ def test_rapid_copies_never_loop() -> None:
 
         # nudl cleans it and writes back.
         cleaned_text = f"https://example.com/{i}"
-        guard.arm(cleaned_text)
+        token = guard.arm(cleaned_text)
         sequence += 1
-        guard.confirm(sequence)
+        guard.confirm(token, sequence)
         cleaned += 1
 
         # Windows echoes nudl's own write straight back at it.

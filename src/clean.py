@@ -20,6 +20,7 @@ Nothing here performs I/O beyond reading the bundled rules file once.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
@@ -46,6 +47,17 @@ BUNDLED_RULES_PATH = Path(__file__).with_name("rules.json")
 
 #: How many nested redirect wrappers to unwrap before giving up.
 MAX_UNWRAP_DEPTH = 3
+
+#: Maximum URL length accepted for processing — bounds ReDoS exponent.
+MAX_URL_LENGTH = 4096
+#: Maximum query key length accepted for regex matching.
+MAX_KEY_LENGTH = 256
+
+#: Patterns with nested quantifiers are the classic ReDoS primitive — a group
+#: that itself contains a quantifier, `.`, or alternation, followed by another
+#: quantifier: `(a+)+`, `(a*)*`, `(a|a)*`, `(x+x+)+y`, `(.*a){n}`, `(.*)*`.
+#: Reject at load time so a user-edited rules.json can never freeze the thread.
+_NESTED_QUANTIFIER = re.compile(r"\([^)(]*[+*.\d|][^)(]*\)[*{+?]")
 
 #: Query keys that mean "this URL is cryptographically signed — any edit returns 403".
 #: Presence of ANY of these makes the whole URL untouchable. Deliberately broad: a
@@ -302,11 +314,14 @@ def _as_list(value: object) -> list[Any]:
 # ---------------------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=2048)
-def _key_matcher(pattern: str) -> re.Pattern[str]:
-    """Compile one rule pattern into a case-insensitive full-key matcher.
+_NEVER = re.compile(r"(?!)")
 
-    `^utm_.*$` -> anchored regex, `pd_rd_*` -> prefix glob, `fbclid` -> exact key.
+
+def _compile_pattern(pattern: str) -> re.Pattern[str]:
+    """Compile one rule pattern into a case-insensitive full-key matcher. May raise re.error.
+
+    Rejects patterns with nested quantifiers (the classic ReDoS primitive) — a
+    user-edited rules.json must never be able to freeze the clipboard thread.
     """
     if pattern.startswith("^"):
         body = pattern
@@ -314,10 +329,31 @@ def _key_matcher(pattern: str) -> re.Pattern[str]:
         body = re.escape(pattern[:-1]) + ".*"
     else:
         body = re.escape(pattern)
-    return re.compile(body, re.IGNORECASE)
+    compiled = re.compile(body, re.IGNORECASE)
+    # Check the ORIGINAL pattern (before our escaping) for nested quantifiers.
+    # Patterns we escape ourselves are always safe; the risk is user-supplied regex.
+    if pattern.startswith("^") and _NESTED_QUANTIFIER.search(pattern):
+        raise re.error(f"pattern {pattern!r} contains a nested quantifier (ReDoS risk)")
+    return compiled
+
+
+@lru_cache(maxsize=2048)
+def _key_matcher(pattern: str) -> re.Pattern[str]:
+    """Compile one rule pattern into a case-insensitive full-key matcher.
+
+    `^utm_.*$` -> anchored regex, `pd_rd_*` -> prefix glob, `fbclid` -> exact key.
+    Returns a never-matching pattern on error so one bad rule never disables all cleaning.
+    """
+    try:
+        return _compile_pattern(pattern)
+    except re.error:
+        logger.warning("skipping uncompilable tracker pattern %r", pattern)
+        return _NEVER
 
 
 def _matches_any(key: str, patterns: tuple[str, ...]) -> bool:
+    if len(key) > MAX_KEY_LENGTH:
+        return False
     return any(_key_matcher(p).fullmatch(key) for p in patterns)
 
 
@@ -339,7 +375,10 @@ def _strip_www(host: str) -> str:
 
 def _host_covers(host: str, domain: str) -> bool:
     """True if `host` is `domain` or a subdomain of it. Never a bare substring match."""
-    domain = domain.lower().lstrip(".")
+    host = host.lower().rstrip(".")
+    domain = domain.lower().strip().lstrip(".").rstrip(".")
+    if not domain:
+        return False
     return host == domain or host.endswith("." + domain)
 
 
@@ -350,7 +389,13 @@ def _providers_for(host: str, rules: dict[str, Any]) -> list[dict[str, Any]]:
         if not pattern:
             continue
         try:
-            if re.search(pattern, host, re.IGNORECASE):
+            # Anchor the pattern to prevent `amazon.evil.com` from matching the
+            # Amazon provider. A pattern not already anchored with ^ or (^|\.) is
+            # wrapped to match only on a domain boundary.
+            anchored = pattern
+            if not (pattern.startswith("^") or pattern.startswith("(^")):
+                anchored = r"(?:^|\.)" + pattern
+            if re.search(anchored, host, re.IGNORECASE):
                 out.append(provider)
         except re.error:
             continue  # a broken pattern disables that provider, nothing else
@@ -446,12 +491,29 @@ def _wrapper_target(parts: Any, rules: dict[str, Any]) -> str | None:
             # unquote(), never unquote_plus(): a '+' inside an encoded URL is a literal
             # plus, not a space.
             candidate = unquote(raw.split("=", 1)[1]) if "=" in raw else ""
-            if _is_absolute_http(candidate):
-                return candidate
+            if not _is_absolute_http(candidate):
+                continue
+            # Reject targets with userinfo (user:pass@host display spoofing),
+            # backslashes (parser confusion), or private/link-local IPs.
+            target_parts = urlsplit(candidate)
+            if "@" in target_parts.netloc or "\\" in candidate:
+                continue
+            try:
+                ip = ipaddress.ip_address(target_parts.hostname or "")
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    continue
+            except ValueError:
+                pass
+            return candidate
     return None
 
 
+_FORBIDDEN_CHARS = re.compile(r"[\x00-\x20\x7f]")
+
+
 def _is_absolute_http(url: str) -> bool:
+    if _FORBIDDEN_CHARS.search(url):
+        return False
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -465,6 +527,7 @@ def _is_absolute_http(url: str) -> bool:
 
 
 def _apply_raw_rules(url: str, host: str, rules: dict[str, Any]) -> str:
+    before = urlsplit(url)
     for provider in _providers_for(host, rules):
         for rule in provider.get("rawRules", []):
             pattern, replacement = rule.get("pattern"), rule.get("replacement", "")
@@ -474,10 +537,18 @@ def _apply_raw_rules(url: str, host: str, rules: dict[str, Any]) -> str:
                 candidate = re.sub(pattern, replacement, url)
             except re.error:
                 continue
-            # A rawRule may only ever SHORTEN a URL. If it grew or mangled it into
-            # something that no longer parses, discard the edit.
-            if len(candidate) <= len(url) and _is_absolute_http(candidate):
+            # A rawRule may only ever SHORTEN a URL, and must preserve scheme and
+            # host — a rule that silently retargets the link to another domain
+            # or downgrades https→http is worse than no rule at all.
+            after = urlsplit(candidate)
+            if (
+                len(candidate) <= len(url)
+                and after.scheme == before.scheme
+                and after.netloc == before.netloc
+                and _is_absolute_http(candidate)
+            ):
                 url = candidate
+                before = after
     return url
 
 
@@ -527,6 +598,9 @@ def _clean_result(
     exceptions: list[str],
     strip_referral: bool,
 ) -> CleanResult:
+    if len(url) > MAX_URL_LENGTH:
+        return CleanResult(original=url, result=url, reason_noop="too_long")
+
     current = url
     seen = {url}
     removed: list[str] = []
@@ -545,11 +619,11 @@ def _clean_result(
         # that carries its own ?token= (out.reddit.com does) is left alone rather than
         # half-rewritten.
         if _is_signed(parts.query):
-            return CleanResult(original=url, result=current, reason_noop="signed_url")
+            return CleanResult(original=url, result=url, reason_noop="signed_url")
 
         host = _hostname(parts)
         if _is_excepted(current, host, rules, exceptions):
-            return CleanResult(original=url, result=current, reason_noop="exception")
+            return CleanResult(original=url, result=url, reason_noop="exception")
 
         if depth == MAX_UNWRAP_DEPTH:
             break  # depth cap: guard and strip what we have, but unwrap no further

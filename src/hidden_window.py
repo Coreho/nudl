@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import secrets
+import threading
 from collections.abc import Callable
 
 import win32api
@@ -30,8 +32,10 @@ class MessageWindow:
 
     def __init__(self, class_name: str = "nudlMessageWindow") -> None:
         self._handlers: dict[int, list[Handler]] = {}
-        self.class_name = f"{class_name}_{id(self)}"
+        self.class_name = f"{class_name}_{secrets.token_hex(8)}"
         self._class_unregistered = False
+        self._hwnd_lock = threading.Lock()
+        self._pumping = False
 
         wndclass = win32gui.WNDCLASS()
         wndclass.lpszClassName = self.class_name
@@ -56,6 +60,8 @@ class MessageWindow:
 
     def on(self, message: int, handler: Handler) -> None:
         """Call `handler(wparam, lparam)` whenever `message` arrives."""
+        if self._pumping:
+            raise RuntimeError("register handlers before pump()")
         self._handlers.setdefault(message, []).append(handler)
 
     def _wnd_proc(self, hwnd: int, message: int, wparam: int, lparam: int) -> int:
@@ -72,6 +78,7 @@ class MessageWindow:
 
     def pump(self) -> None:
         """Run the message loop. Blocks until `stop()`. Call on the owning thread."""
+        self._pumping = True
         try:
             win32gui.PumpMessages()
         finally:
@@ -79,9 +86,12 @@ class MessageWindow:
 
     def stop(self) -> None:
         """Ask the pump to exit. Safe to call from any thread."""
+        with self._hwnd_lock:
+            hwnd = self.hwnd
+            if not hwnd:
+                return
         try:
-            if self.hwnd:
-                win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
         except Exception:  # noqa: BLE001 — already torn down
             logger.debug("stop() on an already-closed window", exc_info=True)
 
@@ -94,10 +104,11 @@ class MessageWindow:
         whatever thread it likes, and calling DestroyWindow from the wrong one is a
         crash waiting for a quiet afternoon.
         """
-        if self.hwnd:
+        with self._hwnd_lock:
+            hwnd, self.hwnd = self.hwnd, 0
+        if hwnd:
             with contextlib.suppress(Exception):
-                win32gui.DestroyWindow(self.hwnd)
-            self.hwnd = 0
+                win32gui.DestroyWindow(hwnd)
 
         if not self._class_unregistered:
             try:

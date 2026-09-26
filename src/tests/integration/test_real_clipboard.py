@@ -63,8 +63,8 @@ def test_the_guard_matches_on_the_SEQUENCE_alone() -> None:
     guard test passes on the text match alone, which is precisely how the bug hid.
     """
     guard = clipboard.OwnWriteGuard()
-    guard.arm(CLEAN)
-    guard.confirm(clipboard.set_text(CLEAN))
+    token = guard.arm(CLEAN)
+    guard.confirm(token, clipboard.set_text(CLEAN))
 
     _, sequence = clipboard.get_text_and_sequence()
     # Text deliberately withheld: only the sequence number can answer this.
@@ -106,8 +106,8 @@ def test_a_current_sequence_allows_the_write() -> None:
 
 def test_the_guard_recognises_a_real_write_of_ours() -> None:
     guard = clipboard.OwnWriteGuard()
-    guard.arm(CLEAN)
-    guard.confirm(clipboard.set_text(CLEAN))
+    token = guard.arm(CLEAN)
+    guard.confirm(token, clipboard.set_text(CLEAN))
 
     text, sequence = clipboard.get_text_and_sequence()
     assert guard.is_own_write(sequence, text) is True
@@ -116,8 +116,8 @@ def test_the_guard_recognises_a_real_write_of_ours() -> None:
 def test_the_guard_does_not_claim_a_write_that_was_not_ours() -> None:
     """If this ever returned True, auto-watch would go silent and stop cleaning."""
     guard = clipboard.OwnWriteGuard()
-    guard.arm(CLEAN)
-    guard.confirm(clipboard.set_text(CLEAN))
+    token = guard.arm(CLEAN)
+    guard.confirm(token, clipboard.set_text(CLEAN))
 
     # The user copies something. Different text, different sequence number.
     clipboard.set_text("https://example.com/something-the-user-copied?utm_source=x")
@@ -129,8 +129,8 @@ def test_the_guard_does_not_claim_a_write_that_was_not_ours() -> None:
 def test_the_guard_is_one_shot() -> None:
     """A guard that stayed armed would swallow the next identical copy the user made."""
     guard = clipboard.OwnWriteGuard()
-    guard.arm(CLEAN)
-    guard.confirm(clipboard.set_text(CLEAN))
+    token = guard.arm(CLEAN)
+    guard.confirm(token, clipboard.set_text(CLEAN))
 
     text, sequence = clipboard.get_text_and_sequence()
     assert guard.is_own_write(sequence, text) is True

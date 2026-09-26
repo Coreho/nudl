@@ -18,19 +18,22 @@ tell nudl ran at all.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import re
 import shutil
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import pywintypes
 import win32api
 import win32con
 import win32event
+import win32security
 import winerror
 
 from src import clean, clipboard, config, hotkey
@@ -106,26 +109,77 @@ SECRET_LOG_KEYS = frozenset(
         "pwd",
         "otp",
         "pin",
+        "client_secret",
+        "oauth_token",
+        "oauth_token_secret",
+        "auth_token",
+        "authtoken",
+        "bearer",
+        "id_token_hint",
+        "assertion",
+        "code_verifier",
+        "reset_token",
+        "reset_password_token",
+        "confirmation_token",
+        "activation_token",
+        "invitation_token",
+        "verification_code",
+        "magic",
+        "login_token",
+        "email_token",
+        "unsubscribe_token",
+        "jwt",
+        "ticket",
+        "samlresponse",
+        "sso",
+        "token_id",
+        "csrf_token",
+        "nonce",
+        "state",
+        "passcode",
+        "totp",
+        "mfa",
+        "invite",
+        "invitation",
+        "activation",
+        "confirm",
+        "email",
     }
     | set(clean.SIGNED_EXACT_KEYS)
 )
+SECRET_LOG_PREFIXES = clean.SIGNED_KEY_PREFIXES + ("oauth_", "x-api-", "aws_")
+_SECRET_SUBSTRINGS = ("token", "secret", "password", "credential", "signature", "apikey")
 _MASK = "***"
 
 
+def _is_secret_key(key: str) -> bool:
+    key_norm = unquote(key).strip().lower().replace("-", "_").replace(".", "_")
+    prefixes = tuple(p.replace("-", "_") for p in SECRET_LOG_PREFIXES)
+    return (
+        key_norm in SECRET_LOG_KEYS
+        or key_norm.startswith(prefixes)
+        or any(s in key_norm for s in _SECRET_SUBSTRINGS)
+    )
+
+
 def _redact_query(query: str) -> str:
-    parts = []
-    for pair in query.split("&"):
-        key, sep, _value = pair.partition("=")
-        parts.append(f"{key}={_MASK}" if sep and key.lower() in SECRET_LOG_KEYS else pair)
-    return "&".join(parts)
+    out = []
+    for token in re.split(r"([&;])", query):
+        if token in ("&", ";"):
+            out.append(token)
+            continue
+        key, sep, _ = token.partition("=")
+        out.append(f"{key}={_MASK}" if sep and _is_secret_key(key) else token)
+    return "".join(out)
 
 
 def redact(url: str) -> str:
     """Mask credentials and secret-bearing params before a URL is written to disk.
 
-    Two things get masked: the `user:hunter2@host` userinfo, which is a perfectly legal
-    part of a URL, and the values of any param in SECRET_LOG_KEYS. Everything else is
-    left exactly as it is — the log has to stay useful, or nobody will trust it.
+    Three things get masked: the `user:hunter2@host` userinfo, the values of any
+    param in SECRET_LOG_KEYS (in both query and fragment), and any key matching
+    known secret prefixes or substrings. Everything else is left exactly as it is
+    — the log has to stay useful, or nobody will trust it.
     """
     try:
         parts = urlsplit(url)
@@ -138,12 +192,13 @@ def redact(url: str) -> str:
         netloc = f"***@{host}"
 
     query = _redact_query(parts.query) if parts.query else parts.query
+    fragment = _redact_query(parts.fragment) if "=" in parts.fragment else parts.fragment
 
     # Only rebuild if something actually changed: urlunsplit does not always round-trip
     # exotic inputs byte-for-byte, and the log should show the link the user really had.
-    if netloc == parts.netloc and query == parts.query:
+    if netloc == parts.netloc and query == parts.query and fragment == parts.fragment:
         return url
-    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
+    return urlunsplit((parts.scheme, netloc, parts.path, query, fragment))
 
 
 def format_log_entry(result: clean.CleanResult, stamp: str) -> str:
@@ -549,9 +604,10 @@ class NudlApp:
         just happened rather than on something the user might have replaced.
         """
         with self._write_lock:
-            self._own_write.arm(text)
+            token = self._own_write.arm(text)
             try:
-                self._own_write.confirm(clipboard.set_text(text, expect_sequence=expect_sequence))
+                seq = clipboard.set_text(text, expect_sequence=expect_sequence)
+                self._own_write.confirm(token, seq)
             except Exception:  # noqa: BLE001 — busy clipboard, changed clipboard, any win32 failure
                 logger.warning("could not write the clipboard", exc_info=True)
                 self._own_write.disarm()
@@ -691,6 +747,13 @@ class NudlApp:
 
     @staticmethod
     def _open(path: Path) -> None:
+        # `os.startfile` runs whatever the file's type is associated with, so nudl only
+        # ever hands it its own config, rules and log. `.log` is on the list because
+        # View log is the audit trail the README tells people to check nudl's work with;
+        # refusing it made that menu item silently do nothing.
+        if path.suffix.lower() not in (".json", ".log"):
+            logger.warning("refusing to open %s — not a nudl config, rules or log file", path)
+            return
         try:
             os.startfile(path)  # noqa: S606 — opening the user's own config/log
         except OSError:
@@ -727,7 +790,22 @@ def acquire_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> int | None:
     because the product works is worse than no test.
     """
     try:
-        handle = win32event.CreateMutex(None, False, name)
+        sd = win32security.SECURITY_DESCRIPTOR()
+        acl = win32security.ACL()
+        # Grant the current user access so the same user can open the mutex
+        # (for the "already exists" check) while denying everyone else.
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32con.TOKEN_QUERY
+        )
+        user_sid = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+        acl.AddAccessAllowedAce(
+            win32security.ACL_REVISION, win32con.GENERIC_ALL, user_sid
+        )
+        sd.SetSecurityDescriptorDacl(1, acl, 0)
+        sa = win32security.SECURITY_ATTRIBUTES()
+        sa.SECURITY_DESCRIPTOR = sd
+        sa.bInheritHandle = False
+        handle = win32event.CreateMutex(sa, False, name)
     except pywintypes.error:
         # Under pythonw there is no console, so an uncaught exception here would kill
         # nudl before the tray ever appears, with nothing on screen and nothing in a log
@@ -787,7 +865,9 @@ def main() -> None:
     try:
         NudlApp().run()
     finally:
-        win32api.CloseHandle(handle)
+        if handle:
+            with contextlib.suppress(Exception):
+                win32api.CloseHandle(handle)
 
 
 if __name__ == "__main__":

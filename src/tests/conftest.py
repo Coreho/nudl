@@ -36,6 +36,7 @@ WINDOWS_ONLY = (
     "unit/test_log_format.py",
     "unit/test_own_write_guard.py",
     "unit/test_rules_management.py",
+    "unit/test_security.py",
     "unit/test_single_instance.py",
     "unit/test_tray_icon.py",
     "unit/test_undo.py",

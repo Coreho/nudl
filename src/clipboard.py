@@ -22,6 +22,7 @@ Hence `_session`: Windows will not serialise nudl's own threads, so nudl does it
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.wintypes
 import logging
@@ -134,20 +135,50 @@ def set_text(text: str, hwnd: int = 0, expect_sequence: int | None = None) -> in
     hold the clipboard open, Windows lets no other process open it, so nothing can slip
     in between the comparison and the write. Checking the sequence number before calling
     this would just be the same race with extra steps.
-    """
-    with _opened(hwnd):
-        if expect_sequence is not None and sequence_number() != expect_sequence:
-            raise ClipboardChanged("the clipboard changed between the read and the write")
-        win32clipboard.EmptyClipboard()
-        win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
 
-    # Read the sequence number AFTER the clipboard is closed, and not a moment before.
-    # Windows goes on bumping the counter through CloseClipboard — a write measured from
-    # inside the open clipboard reports 2257 when the listener will be told 2260. Reading
-    # it early is how the own-write guard ends up armed with a number that can never
-    # match, which is exactly what it was doing: a "dual-signal" guard running on one
-    # signal, with the text comparison quietly carrying auto-watch on its own.
-    return sequence_number()
+    The write is deliberately NOT marked `CanIncludeInClipboardHistory = 0` or
+    `ExcludeClipboardContentFromMonitorProcessing`. Those are for passwords. The tracked
+    link is already in Win+V history and in any clipboard manager — the app it was
+    copied from put it there — so hiding nudl's version would leave the dirty copy as the
+    only one the user can find again, and protect nothing.
+    """
+    # `_session` is taken out here as well as inside `_opened` (it is reentrant) so that
+    # it is still held when the sequence number is read below, after the close. Released
+    # in between, another of nudl's own threads could write first, and this would report
+    # that write's number as ours.
+    with _session:
+        with _opened(hwnd):
+            if expect_sequence is not None and sequence_number() != expect_sequence:
+                raise ClipboardChanged("the clipboard changed between the read and the write")
+            previous = _text_while_open()
+            win32clipboard.EmptyClipboard()
+            try:
+                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+            except Exception:
+                # EmptyClipboard has already run. Put back what was there rather than
+                # leave the user with nothing at all to paste.
+                if previous is not None:
+                    with contextlib.suppress(Exception):
+                        win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, previous)
+                raise
+
+        # Read the sequence number AFTER the clipboard is closed, and not a moment before.
+        # Windows goes on bumping the counter through CloseClipboard — a write measured from
+        # inside the open clipboard reports 2257 when the listener will be told 2260. Reading
+        # it early is how the own-write guard ends up armed with a number that can never
+        # match, which is exactly what it was doing: a "dual-signal" guard running on one
+        # signal, with the text comparison quietly carrying auto-watch on its own.
+        return sequence_number()
+
+
+def _text_while_open() -> str | None:
+    """The clipboard's text, for a caller that already holds it open."""
+    try:
+        if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+    except (TypeError, OSError):
+        pass
+    return None
 
 
 def add_format_listener(hwnd: int) -> bool:
@@ -196,11 +227,15 @@ class OwnWriteGuard:
         self._lock = threading.Lock()
         self._sequence: int | None = None
         self._text: str | None = None
+        self._generation: int = 0
 
-    def arm(self, text: str) -> None:
-        """Call immediately BEFORE writing `text` to the clipboard."""
+    def arm(self, text: str) -> int:
+        """Call immediately BEFORE writing `text` to the clipboard. Returns a token."""
         with self._lock:
+            self._generation += 1
             self._text = text
+            self._sequence = None
+            return self._generation
 
     def disarm(self) -> None:
         """Release the armed state if the write was aborted or failed."""
@@ -208,11 +243,11 @@ class OwnWriteGuard:
             self._text = None
             self._sequence = None
 
-    def confirm(self, sequence: int) -> None:
-        """Call immediately AFTER the write, with the resulting sequence number."""
+    def confirm(self, token: int, sequence: int) -> None:
+        """Call immediately AFTER the write, with the generation token and sequence."""
         with self._lock:
-            if self._text is None:
-                return  # already matched and cleared by is_own_write
+            if token != self._generation or self._text is None:
+                return  # stale token or already consumed
             self._sequence = sequence
 
     def is_own_write(self, sequence: int, text: str | None) -> bool:
