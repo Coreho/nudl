@@ -89,12 +89,16 @@ def parse(combo: str) -> tuple[int, int]:
     # Any single-modifier editing accelerator (ctrl+c, ctrl+v, etc.) or a chord
     # Windows reserves (alt+tab, win+l) must be refused outright. Matching is on
     # the exact modifier set — ctrl+alt+v is NOT ctrl+v and is perfectly fine.
+    #
+    # Named keys are listed by NAME, as parse() produces them. frozenset("cvx") is a set
+    # of letters, which is what the single-letter rows want; frozenset("\t") was a set
+    # holding a tab character, which "tab" never equals, so alt+tab went straight through.
     _DENYLIST = {
         frozenset({MOD_CONTROL}): frozenset("cvxazsptfnb"),
-        frozenset({MOD_ALT}): frozenset("\t"),
-        frozenset({MOD_WIN}): frozenset("ldrev"),
+        frozenset({MOD_ALT}): frozenset({"tab", "f4", "esc", "escape"}),
+        frozenset({MOD_WIN}): frozenset("ldrev") | {"tab"},
         frozenset({MOD_WIN, MOD_CONTROL}): frozenset("d"),
-        frozenset({MOD_ALT, MOD_CONTROL}): frozenset("\t"),
+        frozenset({MOD_ALT, MOD_CONTROL}): frozenset({"tab", "del", "delete"}),
     }
     key_lower = key.lower()
     mod_set = frozenset(m for m in (MOD_CONTROL, MOD_ALT, MOD_SHIFT, MOD_WIN) if modifiers & m)

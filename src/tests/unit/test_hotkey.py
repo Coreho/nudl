@@ -61,3 +61,19 @@ def test_digits() -> None:
 def test_bad_chords_raise(combo: str) -> None:
     with pytest.raises(hotkey.InvalidHotkey):
         hotkey.parse(combo)
+
+
+@pytest.mark.parametrize(
+    "combo",
+    ["ctrl+c", "ctrl+v", "alt+tab", "ctrl+alt+tab", "alt+f4", "win+l", "win+tab", "ctrl+alt+del"],
+)
+def test_system_shortcuts_are_refused(combo: str) -> None:
+    """Named keys included: the Tab rows once held a tab CHARACTER, so alt+tab slipped by."""
+    with pytest.raises(hotkey.InvalidHotkey, match="reserved"):
+        hotkey.parse(combo)
+
+
+@pytest.mark.parametrize("combo", ["ctrl+alt+v", "ctrl+shift+tab", "alt+shift+f4", "ctrl+alt+l"])
+def test_near_misses_are_still_allowed(combo: str) -> None:
+    """The denylist matches the exact modifier set; one extra modifier is a different chord."""
+    hotkey.parse(combo)
