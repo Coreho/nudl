@@ -31,6 +31,7 @@ import sys
 WINDOWS_ONLY = (
     "integration/test_real_app.py",
     "integration/test_real_clipboard.py",
+    "unit/test_autostart.py",
     "unit/test_clipboard_filter.py",
     "unit/test_hotkey.py",
     "unit/test_log_format.py",

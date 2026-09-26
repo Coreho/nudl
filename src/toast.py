@@ -8,7 +8,7 @@ nudl draws its own always-on-top window, which nothing can quietly swallow.
 Tk is thread-affine: every widget call must happen on the thread that created the root.
 So this module owns one long-lived UI thread and everything is marshalled onto it
 through a queue. Callers (the tray on the main thread, the message pump on its own
-thread) just call `show_toast()` / `ask_mode()` from wherever they are.
+thread) just call `show_toast()` / `ask_first_run()` from wherever they are.
 """
 
 from __future__ import annotations
@@ -178,11 +178,19 @@ class OverlayUI:
 
     # -- first-run mode picker ---------------------------------------------------
 
-    def ask_mode(self, default: str = "hotkey") -> str:
-        """Blocking. Returns "hotkey" or "auto". Closing the dialog keeps the default."""
-        chosen: dict[str, str] = {}
+    def ask_first_run(
+        self, default: str = "hotkey", start_with_windows: bool = True
+    ) -> tuple[str, bool]:
+        """Blocking. Returns (mode, start_with_windows). Closing the dialog keeps the defaults.
+
+        The autostart question is asked HERE, once, as a visible checkbox, rather than
+        switched on silently or left buried in the tray menu. Silently would be a clipboard
+        tool quietly adding itself to startup; buried is how nobody ever finds it, and
+        nudl is gone after the first reboot.
+        """
+        chosen: dict[str, object] = {}
         done = threading.Event()
-        self._post(lambda: self._build_mode_dialog(chosen, done, default))
+        self._post(lambda: self._build_mode_dialog(chosen, done, default, start_with_windows))
 
         # A bare wait() would be a deadlock waiting for a bad day: if the UI thread is
         # dead, nothing will ever drain the queue, nothing will ever set `done`, and nudl
@@ -192,11 +200,18 @@ class OverlayUI:
         while not done.wait(0.25):
             if self._thread is None or not self._thread.is_alive():
                 logger.error("the UI thread died before the mode picker was answered")
-                return default
-        return chosen.get("mode", default)
+                return default, start_with_windows
+        return (
+            str(chosen.get("mode", default)),
+            bool(chosen.get("start_with_windows", start_with_windows)),
+        )
 
     def _build_mode_dialog(
-        self, chosen: dict[str, str], done: threading.Event, default: str
+        self,
+        chosen: dict[str, object],
+        done: threading.Event,
+        default: str,
+        start_with_windows: bool,
     ) -> None:
         assert self._root is not None
         win = tk.Toplevel(self._root)
@@ -204,9 +219,11 @@ class OverlayUI:
         win.configure(bg=_BG, padx=28, pady=24)
         win.resizable(False, False)
         win.attributes("-topmost", True)
+        autostart = tk.BooleanVar(win, value=start_with_windows)
 
         def choose(mode: str) -> None:
             chosen["mode"] = mode
+            chosen["start_with_windows"] = autostart.get()
             with contextlib.suppress(tk.TclError):
                 win.destroy()
             done.set()
@@ -251,6 +268,21 @@ class OverlayUI:
             tk.Label(row, text=blurb, bg=_BG, fg=_MUTED, font=("Segoe UI", 9), anchor="w").pack(
                 side="left", padx=(12, 0)
             )
+
+        tk.Checkbutton(
+            win,
+            text="Start nudl when Windows starts",
+            variable=autostart,
+            bg=_BG,
+            fg=_FG,
+            activebackground=_BG,
+            activeforeground=_FG,
+            selectcolor="#2a2e35",
+            font=("Segoe UI", 9),
+            cursor="hand2",
+            borderwidth=0,
+            highlightthickness=0,
+        ).pack(anchor="w", pady=(16, 0))
 
         win.update_idletasks()
         x = (win.winfo_screenwidth() - win.winfo_width()) // 2

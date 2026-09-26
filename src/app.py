@@ -36,7 +36,7 @@ import win32event
 import win32security
 import winerror
 
-from src import clean, clipboard, config, hotkey
+from src import autostart, clean, clipboard, config, hotkey
 from src.hidden_window import MessageWindow
 from src.toast import OverlayUI
 from src.tray import Tray
@@ -268,6 +268,9 @@ class NudlApp:
 
         if not self.config["first_run_complete"]:
             self._first_run()
+        # Every launch, not just the first: the exe may have moved since the Run value was
+        # written, and a value pointing at nothing is autostart silently switched off.
+        autostart.sync(self.config["run_at_startup"])
 
         pump = threading.Thread(target=self._pump, name="nudl-pump", daemon=True)
         pump.start()
@@ -275,6 +278,8 @@ class NudlApp:
         tray = Tray(
             get_mode=lambda: self.config["mode"],
             set_mode=self._set_mode,
+            get_run_at_startup=lambda: self.config["run_at_startup"],
+            toggle_run_at_startup=self._toggle_run_at_startup,
             undo=self.undo,
             can_undo=self.can_undo,
             open_settings=self._open_settings,
@@ -288,7 +293,9 @@ class NudlApp:
 
     def _first_run(self) -> None:
         """Ask once, remember forever (FR-010)."""
-        self.config["mode"] = self.ui.ask_mode(default=self.config["mode"])
+        mode, start_with_windows = self.ui.ask_first_run(default=self.config["mode"])
+        self.config["mode"] = mode
+        self.config["run_at_startup"] = start_with_windows
         self.config["first_run_complete"] = True
         config.save(self.config)
 
@@ -722,6 +729,22 @@ class NudlApp:
         self.config["mode"] = mode
         config.save(self.config)
         self.ui.show_toast(f"nudl — {'automatic' if mode == 'auto' else 'hotkey'} mode", seconds=2)
+
+    def _toggle_run_at_startup(self) -> None:
+        wanted = not self.config["run_at_startup"]
+        try:
+            if wanted:
+                autostart.enable()
+            else:
+                autostart.disable()
+        except OSError:
+            # Leave the setting where it was, so the tick in the menu keeps telling the
+            # truth about what Windows will actually do at the next logon.
+            logger.exception("could not %s autostart", "enable" if wanted else "disable")
+            self.ui.show_toast("nudl — could not change Start with Windows. Check the log.")
+            return
+        self.config["run_at_startup"] = wanted
+        config.save(self.config)
 
     def _open_settings(self) -> None:
         path = config.config_path()
